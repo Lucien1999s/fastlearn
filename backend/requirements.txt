@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+langgraph>=1,<2
+langchain>=1,<2
+langchain-google-genai
+python-dotenv
