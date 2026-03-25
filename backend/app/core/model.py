@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 
 QuestionType = Literal["是非題", "單選題", "多選題", "情境題", "錯題改寫"]
 DifficultyLevel = Literal["very_easy", "easy", "medium", "hard", "very_hard"]
+ScoreBand = Literal[0, 25, 50, 75, 100]
 
 ALLOWED_DIFFICULTIES = {"very_easy", "easy", "medium", "hard", "very_hard"}
 
@@ -40,6 +41,11 @@ class QuestionItem(BaseModel):
 
 class QuizOutputSchema(BaseModel):
     questions: list[QuestionItem]
+
+
+class JudgeResultSchema(BaseModel):
+    feedback: str = Field(description="第二人稱對考生的批改敘述")
+    score: ScoreBand = Field(description="評分等級")
 
 
 class QuizState(TypedDict):

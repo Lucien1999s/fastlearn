@@ -148,6 +148,35 @@ def run_quiz_workflow(
         "questions": []
     })
 
+def llm_judge(
+    question: str,
+    answer: str,
+    ground_truth: str,
+    q_type: str
+):
+    if q_type == "情境題":
+        prompt = f"""你是一個專業評分員，你會根據答題結果評分
+題目: {question}
+答題: {answer}
+參考解: {ground_truth}
+
+評分依據: 答題結果對於此情境題解的好壞/正確
+分數評級: 0, 25, 50, 75, 100
+請給分數評級和第二人稱對考生的批改敘述，輸出如: [str, int]
+"""
+    else:
+        prompt = f"""你是一個專業評分員，你會根據答題結果評分
+題目: {question}
+答題: {answer}
+參考解: {ground_truth}
+
+評分依據: 答題結果對於此錯題改寫改的完整與否
+分數評級: 0, 25, 50, 75, 100
+請給分數評級和第二人稱對考生的批改敘述，輸出如: [str, int]
+"""
+    # llm = get_llm()
+    resp = llm.invoke(prompt)
+    return resp.content
 
 from pathlib import Path
 
@@ -170,3 +199,19 @@ if __name__ == "__main__":
 
     print("\n=== Questions ===")
     print(result["questions"] if result else None)
+
+    res = llm_judge(
+        question="一家大型企業希望建立一個內部知識庫問答系統，讓員工能快速查詢公司政策、專案文件等。他們發現單純使用大型語言模型（LLM）回答時，有時會出現幻覺或資訊過時的問題。請問RAG技術如何幫助該企業解決這些問題，並簡述其運作方式？",
+        answer="使用 RAG 技術用於獲取外部資訊，讓 LLM 不再只依靠自身的「腦內知識」，而是在 Inference-time 階段延伸獲取外部資訊，這是 RAG 可避免的幻覺情況或是資訊過時",
+        ground_truth="RAG能透過從企業內部知識庫中檢索最新的、相關的政策或文件資料，將這些外部資訊作為上下文提供給LLM。這樣LLM就能基於這些真實且即時的資料生成答案，有效避免幻覺並確保資訊的準確性與時效性。",
+        q_type="情境題"
+    )
+    print(type(res))
+
+    res = llm_judge(
+        question="請改寫以下錯誤陳述：「BM25是一種先進的語意檢索演算法，它主要透過分析查詢詞的語意相似度來為文件打分，並且會特別懲罰在文件中出現次數過多的常見詞。」",
+        answer="BM25是一種先進的語意檢索演算法，它主要透過query term在文件中出現的次數（term frequency）、該term在整個語料庫中的稀有度（inverse document frequency, IDF）以及文件長度（document length normalization）來為每篇文件打分。",
+        ground_truth="BM25是一種經典的keyword-based檢索演算法，它會根據查詢詞在文件中出現的次數（term frequency）、該term在整個語料庫中的稀有度（inverse document frequency, IDF）以及文件長度來為每篇文件打分，稀有詞的權重會更高。",
+        q_type="錯題改寫"
+    )
+    print(type(res))

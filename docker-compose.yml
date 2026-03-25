@@ -1,23 +1,49 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fastlearn-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fastlearn
+      POSTGRES_USER: fastlearn
+      POSTGRES_PASSWORD: fastlearn
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastlearn -d fastlearn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
-    container_name: fast-learning-backend
+    container_name: fastlearn-backend
+    restart: unless-stopped
     working_dir: /app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    volumes:
-      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://fastlearn:fastlearn@postgres:5432/fastlearn
+      CORS_ALLOW_ORIGINS: http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
       context: ./frontend
-    container_name: fast-learning-frontend
-    volumes:
-      - ./frontend/index.html:/usr/share/nginx/html/index.html:ro
+      args:
+        VITE_API_BASE_URL: http://127.0.0.1:8000/api
+    container_name: fastlearn-frontend
+    restart: unless-stopped
     ports:
       - "3000:80"
     depends_on:
       - backend
 
+volumes:
+  postgres_data:

@@ -51,7 +51,7 @@ def generate_questions(state: QuizState) -> dict:
 3. 是非題 answer 請填 O 或 X
 4. 單選題 answer 請填單一字母，例如 A
 5. 多選題 answer 請填字母陣列，例如 ["A", "C"]
-6. 情境題與錯題改寫 answer 請填精要解答
+6. 情境題與錯題改寫 answer 填寫精簡約兩三句的解答
 """
 
     response = structured_llm.invoke(prompt)
