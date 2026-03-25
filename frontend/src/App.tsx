@@ -1,3 +1,5 @@
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import type {
@@ -12,6 +14,7 @@ import type {
 type QuizPhase = "answering" | "review";
 type UserAnswer = string | string[];
 type ChoiceStatus = "neutral" | "selected" | "correct" | "missed" | "incorrect";
+type DownloadDocumentType = "quiz" | "report";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000/api";
@@ -144,6 +147,301 @@ function formatOfficialAnswer(question: QuestionItem): string {
   }
 
   return summarizeAnswer(question.answer);
+}
+
+function formatOptionText(option: string): string {
+  return option.replace(/^\s*[A-Z][\.\)、]\s*/u, "").trim();
+}
+
+function sanitizeFileName(value: string): string {
+  return value
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 60) || "fastlearn_quiz";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildDownloadDocumentMarkup({
+  quiz,
+  scoreResult,
+  answers,
+  documentType,
+}: {
+  quiz: QuizWorkflowResponse;
+  scoreResult: QuizScoreResponse | null;
+  answers: Record<number, UserAnswer>;
+  documentType: DownloadDocumentType;
+}): string {
+  const metadata = [
+    `Created: ${formatDate(quiz.created_at)}`,
+    `Difficulty: ${DIFFICULTY_LABELS[quiz.difficulty]}`,
+    `Question Count: ${formatQuestionCount(quiz.numbers)}`,
+  ];
+
+  if (documentType === "report" && scoreResult) {
+    metadata.push(`Score: ${formatScoreValue(scoreResult.total_score)} / ${formatScoreValue(scoreResult.max_score)}`);
+  }
+
+  const questionMarkup = quiz.questions.map((question, index) => {
+    const scoreEntry = scoreResult?.results.find((item) => item.question_index === index);
+    const userAnswer = answers[index];
+    const optionsMarkup = question.options
+      .map((option, optionIndex) => {
+        const letter = String.fromCharCode(65 + optionIndex);
+        return `<li><span class="option-letter">${letter}.</span>${escapeHtml(formatOptionText(option))}</li>`;
+      })
+      .join("");
+
+    return `
+      <article class="pdf-question">
+        <div class="pdf-question__head">
+          <span class="pdf-question__index">${String(index + 1).padStart(2, "0")}</span>
+          <span class="pdf-question__type">${escapeHtml(question.type)}</span>
+          ${
+            documentType === "report" && scoreEntry
+              ? `<span class="pdf-question__score">${formatScoreValue(scoreEntry.earned_score)} / ${formatScoreValue(scoreEntry.max_score)}</span>`
+              : ""
+          }
+        </div>
+        <h2>${escapeHtml(question.stem)}</h2>
+        ${
+          question.options.length > 0
+            ? `<ol class="pdf-options">${optionsMarkup}</ol>`
+            : ""
+        }
+        <div class="pdf-answer-block pdf-answer-block--official">
+          <span>Official Answer</span>
+          <p>${escapeHtml(formatOfficialAnswer(question))}</p>
+        </div>
+        ${
+          documentType === "report" && scoreResult
+            ? `
+              <div class="pdf-answer-block">
+                <span>Your Answer</span>
+                <p>${escapeHtml(formatUserAnswer(question, userAnswer))}</p>
+              </div>
+              ${
+                scoreEntry?.feedback
+                  ? `
+                    <div class="pdf-answer-block">
+                      <span>Feedback</span>
+                      <p>${escapeHtml(scoreEntry.feedback)}</p>
+                    </div>
+                  `
+                  : ""
+              }
+            `
+            : ""
+        }
+      </article>
+    `;
+  }).join("");
+
+  return `
+    <div class="pdf-shell">
+      <style>
+        .pdf-shell {
+          width: 794px;
+          padding: 44px;
+          box-sizing: border-box;
+          background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+          color: #0f172a;
+          font-family: "Plus Jakarta Sans", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        }
+        .pdf-header {
+          padding: 26px 28px;
+          border: 1px solid rgba(37, 99, 235, 0.12);
+          border-radius: 28px;
+          background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 64, 175, 0.96) 100%);
+          color: #f8fafc;
+        }
+        .pdf-header h1 {
+          margin: 0;
+          font-size: 34px;
+          line-height: 1;
+          letter-spacing: -0.06em;
+        }
+        .pdf-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 16px;
+        }
+        .pdf-meta span {
+          padding: 8px 12px;
+          border-radius: 999px;
+          font-size: 12px;
+          background: rgba(226, 232, 240, 0.14);
+          color: #e2e8f0;
+        }
+        .pdf-section-title {
+          margin: 28px 0 14px;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
+          color: #64748b;
+        }
+        .pdf-question {
+          margin-bottom: 18px;
+          padding: 22px;
+          border: 1px solid rgba(148, 163, 184, 0.18);
+          border-radius: 24px;
+          background: rgba(255, 255, 255, 0.96);
+          box-shadow: 0 16px 34px rgba(15, 23, 42, 0.05);
+          page-break-inside: avoid;
+        }
+        .pdf-question__head {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-bottom: 14px;
+        }
+        .pdf-question__index {
+          font-weight: 800;
+          color: #1d4ed8;
+        }
+        .pdf-question__type,
+        .pdf-question__score {
+          padding: 7px 12px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 700;
+          background: rgba(219, 234, 254, 0.92);
+          color: #1d4ed8;
+        }
+        .pdf-question__score {
+          margin-left: auto;
+          background: rgba(15, 23, 42, 0.08);
+          color: #0f172a;
+        }
+        .pdf-question h2 {
+          margin: 0;
+          font-size: 18px;
+          line-height: 1.55;
+        }
+        .pdf-options {
+          margin: 16px 0 0;
+          padding: 0;
+          list-style: none;
+        }
+        .pdf-options li {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 8px;
+          padding: 12px 14px;
+          border: 1px solid rgba(148, 163, 184, 0.16);
+          border-radius: 16px;
+          background: rgba(248, 250, 252, 0.96);
+        }
+        .option-letter {
+          min-width: 22px;
+          font-weight: 800;
+          color: #2563eb;
+        }
+        .pdf-answer-block {
+          margin-top: 14px;
+          padding: 14px 16px;
+          border-radius: 18px;
+          background: rgba(248, 250, 252, 0.98);
+        }
+        .pdf-answer-block--official {
+          background: rgba(239, 246, 255, 0.96);
+        }
+        .pdf-answer-block span {
+          display: block;
+          margin-bottom: 6px;
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: #64748b;
+        }
+        .pdf-answer-block p {
+          margin: 0;
+          font-size: 14px;
+          line-height: 1.6;
+          color: #334155;
+          white-space: pre-wrap;
+        }
+      </style>
+      <header class="pdf-header">
+        <h1>${escapeHtml(quiz.title)}</h1>
+        <div class="pdf-meta">
+          ${metadata.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+        </div>
+      </header>
+      <p class="pdf-section-title">${documentType === "quiz" ? "Question Pack" : "Report Card"}</p>
+      ${questionMarkup}
+    </div>
+  `;
+}
+
+async function downloadQuizPdf({
+  quiz,
+  scoreResult,
+  answers,
+  documentType,
+}: {
+  quiz: QuizWorkflowResponse;
+  scoreResult: QuizScoreResponse | null;
+  answers: Record<number, UserAnswer>;
+  documentType: DownloadDocumentType;
+}) {
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.left = "-100000px";
+  container.style.top = "0";
+  container.style.zIndex = "-1";
+  container.innerHTML = buildDownloadDocumentMarkup({
+    quiz,
+    scoreResult,
+    answers,
+    documentType,
+  });
+
+  document.body.appendChild(container);
+
+  try {
+    const canvas = await html2canvas(container.firstElementChild as HTMLElement, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      useCORS: true,
+    });
+    const pdf = new jsPDF({ unit: "pt", format: "a4" });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imageData = canvas.toDataURL("image/png");
+    const imageWidth = pageWidth;
+    const imageHeight = (canvas.height * imageWidth) / canvas.width;
+    let heightLeft = imageHeight;
+    let position = 0;
+
+    pdf.addImage(imageData, "PNG", 0, position, imageWidth, imageHeight, undefined, "FAST");
+    heightLeft -= pageHeight;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imageHeight;
+      pdf.addPage();
+      pdf.addImage(imageData, "PNG", 0, position, imageWidth, imageHeight, undefined, "FAST");
+      heightLeft -= pageHeight;
+    }
+
+    const fileBase = sanitizeFileName(quiz.title);
+    pdf.save(`${fileBase}_${documentType === "quiz" ? "quiz" : "report"}.pdf`);
+  } finally {
+    document.body.removeChild(container);
+  }
 }
 
 function getChoiceOptionStatus(
@@ -292,7 +590,7 @@ function QuestionCard({
                 >
                   <span className="choice-button__marker">{letter}</span>
                   <span className="choice-button__content">
-                    <span>{option}</span>
+                    <span>{formatOptionText(option)}</span>
                     {isReview && getReviewStatusLabel(question, status) && (
                       <span className={`choice-button__tag choice-button__tag--${status}`}>
                         {getReviewStatusLabel(question, status)}
@@ -359,6 +657,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [history, setHistory] = useState<QuizHistoryItem[]>([]);
   const [selectedQuizId, setSelectedQuizId] = useState<string | null>(null);
@@ -374,7 +673,9 @@ export default function App() {
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [isDeletingQuiz, setIsDeletingQuiz] = useState(false);
   const [isScoringQuiz, setIsScoringQuiz] = useState(false);
+  const [isDownloadingDocument, setIsDownloadingDocument] = useState(false);
   const [quizPhase, setQuizPhase] = useState<QuizPhase>("answering");
+  const [downloadTarget, setDownloadTarget] = useState<DownloadDocumentType>("quiz");
   const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({});
   const [scoreResult, setScoreResult] = useState<QuizScoreResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -382,6 +683,7 @@ export default function App() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const questionsRef = useRef<HTMLElement | null>(null);
   const shouldScrollToQuestionsRef = useRef(false);
+  const availableReport = scoreResult ?? currentQuiz?.score_result ?? null;
 
   useEffect(() => {
     let active = true;
@@ -452,6 +754,7 @@ export default function App() {
     setErrorMessage(null);
     setMenuOpen(false);
     setKnowledgeModalOpen(false);
+    setDownloadModalOpen(false);
     setDeleteTarget(null);
     setQuizPhase("answering");
     setUserAnswers({});
@@ -545,6 +848,15 @@ export default function App() {
     }
   }
 
+  function handleOpenDownloadModal() {
+    if (!currentQuiz) {
+      return;
+    }
+
+    setDownloadTarget("quiz");
+    setDownloadModalOpen(true);
+  }
+
   function handleSingleAnswer(questionIndex: number, value: string) {
     setUserAnswers((previous) => ({
       ...previous,
@@ -620,6 +932,31 @@ export default function App() {
       setErrorMessage(error instanceof Error ? error.message : "Quiz scoring failed.");
     } finally {
       setIsScoringQuiz(false);
+    }
+  }
+
+  async function handleDownloadConfirmed() {
+    if (!currentQuiz || isDownloadingDocument) {
+      return;
+    }
+
+    setIsDownloadingDocument(true);
+
+    try {
+      await downloadQuizPdf({
+        quiz: currentQuiz,
+        scoreResult: availableReport,
+        answers:
+          Object.keys(userAnswers).length > 0
+            ? userAnswers
+            : normalizeSubmittedAnswers(currentQuiz.submitted_answers),
+        documentType: downloadTarget,
+      });
+      setDownloadModalOpen(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to export PDF.");
+    } finally {
+      setIsDownloadingDocument(false);
     }
   }
 
@@ -866,11 +1203,23 @@ export default function App() {
             </div>
 
             <div className="workspace__header-actions">
-              <button type="button" className="ghost-button">
+              <button
+                type="button"
+                className="ghost-button ghost-button--download"
+                onClick={handleOpenDownloadModal}
+                disabled={!currentQuiz}
+              >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M15 8a3 3 0 1 0-2.83-4H12a3 3 0 0 0 .17 1L8.9 7a3 3 0 0 0-1.8-.6A3 3 0 1 0 10 10.9l3.28-1.96A3 3 0 0 0 15 9a3 3 0 0 0 .17-1l3.28 1.96a3 3 0 1 0 .85-1.36L16.02 6.6A3 3 0 0 0 15 8Zm-8 1a1 1 0 1 1-.001-2.001A1 1 0 0 1 7 9Zm11 8a1 1 0 1 1-.001-2.001A1 1 0 0 1 18 17Zm-3-10a1 1 0 1 1-.001-2.001A1 1 0 0 1 15 7Z" fill="currentColor" />
+                  <path
+                    d="M12 3.75v9m0 0 3-3m-3 3-3-3M4.75 15.75v2a1.5 1.5 0 0 0 1.5 1.5h11.5a1.5 1.5 0 0 0 1.5-1.5v-2"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.85"
+                  />
                 </svg>
-                <span>Share</span>
+                <span>Download</span>
               </button>
 
               <div className="menu-anchor">
@@ -1152,6 +1501,72 @@ export default function App() {
                     <p>{value}</p>
                   </article>
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {downloadModalOpen && currentQuiz && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setDownloadModalOpen(false)}
+          >
+            <div
+              className="confirm-panel download-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="download-quiz-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p className="results__eyebrow">Download PDF</p>
+              <h2 id="download-quiz-title">Export "{currentQuiz.title}"</h2>
+              <p>Choose the PDF format you want to export for the current quiz.</p>
+
+              <div className="download-options">
+                <button
+                  type="button"
+                  className={`download-option ${downloadTarget === "quiz" ? "is-active" : ""}`}
+                  onClick={() => setDownloadTarget("quiz")}
+                >
+                  <span className="download-option__title">Question PDF</span>
+                  <span className="download-option__copy">
+                    Includes the quiz title, metadata, questions, options, and answer key.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`download-option ${downloadTarget === "report" ? "is-active" : ""}`}
+                  onClick={() => availableReport && setDownloadTarget("report")}
+                  disabled={!availableReport}
+                >
+                  <span className="download-option__title">Report PDF</span>
+                  <span className="download-option__copy">
+                    Includes answers, per-question scores, and saved feedback from the latest attempt.
+                  </span>
+                  {!availableReport && (
+                    <span className="download-option__hint">Submit this quiz first to unlock the report.</span>
+                  )}
+                </button>
+              </div>
+
+              <div className="confirm-panel__actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setDownloadModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="submit-button"
+                  disabled={isDownloadingDocument}
+                  onClick={() => void handleDownloadConfirmed()}
+                >
+                  {isDownloadingDocument ? "Preparing..." : "Download PDF"}
+                </button>
               </div>
             </div>
           </div>

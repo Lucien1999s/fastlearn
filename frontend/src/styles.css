@@ -366,6 +366,23 @@ button {
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
 }
 
+.ghost-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.ghost-button--download {
+  gap: 12px;
+  padding-inline: 16px 18px;
+}
+
+.ghost-button--download svg {
+  width: 20px;
+  height: 20px;
+  color: #0f172a;
+}
+
 .ghost-button--icon {
   width: 44px;
   justify-content: center;
@@ -1108,6 +1125,65 @@ button {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 24px;
+}
+
+.download-panel {
+  width: min(560px, 100%);
+}
+
+.download-options {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.download-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 18px 20px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 22px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.05);
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.download-option:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(37, 99, 235, 0.24);
+  box-shadow: 0 20px 38px rgba(15, 23, 42, 0.08);
+}
+
+.download-option.is-active {
+  border-color: rgba(37, 99, 235, 0.32);
+  background: rgba(239, 246, 255, 0.95);
+  box-shadow: 0 22px 40px rgba(37, 99, 235, 0.1);
+}
+
+.download-option:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.download-option__title {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.download-option__copy {
+  color: #475569;
+}
+
+.download-option__hint {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #b45309;
 }
 
 @keyframes spin {
