@@ -106,6 +106,7 @@ export interface LearningInsightsResponse {
   difficulty_performance: DifficultyPerformanceItem[];
   question_type_performance: QuestionTypePerformanceItem[];
   error_type_breakdown: ErrorTypeBreakdownItem[];
+  learning_profile_overview: LearningProfileOverviewItem[];
   sampled_attempt_count: number;
 }
 
@@ -115,4 +116,49 @@ export interface AuthUser {
   name: string;
   picture_url: string | null;
   plan: string;
+  is_admin: boolean;
+  daily_quiz_limit: number;
+  daily_retake_limit: number;
+  learning_profile_enabled: boolean;
+}
+
+export interface LearningProfileEntry {
+  domain: string;
+  status: string;
+  grade: string;
+}
+
+export interface LearningProfileResponse {
+  enabled: boolean;
+  entries: LearningProfileEntry[];
+}
+
+export interface LearningProfileOverviewItem {
+  domain: string;
+  grade: string;
+  grade_score: number;
+  status: string;
+}
+
+export interface DailyQuotaStatus {
+  quizzes_generated_today: number;
+  quiz_limit_per_day: number;
+  retakes_today: number;
+  retake_limit_per_day: number;
+}
+
+export interface AdminUserSummary {
+  id: string;
+  name: string;
+  email: string;
+  plan: string;
+  is_admin: boolean;
+  daily_quiz_limit: number;
+  daily_retake_limit: number;
+  quizzes_generated_today: number;
+  retakes_today: number;
+  total_quizzes: number;
+  total_attempts: number;
+  created_at: string;
+  last_login_at: string | null;
 }

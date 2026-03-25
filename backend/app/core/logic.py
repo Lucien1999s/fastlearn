@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from .llm import get_llm
-from .graph import get_quiz_graph
+from .graph import get_learning_profile_graph, get_quiz_graph
 from .model import ALLOWED_DIFFICULTIES, DifficultyLevel, JudgeResultSchema
 
 
@@ -62,5 +62,24 @@ def run_quiz_workflow(
             "summary": {},
             "spec": {},
             "questions": [],
+        }
+    )
+
+
+def run_learning_profile_workflow(
+    *,
+    learning_profile: list[dict],
+    knowledge_points: list[str],
+    score_payload: dict,
+) -> dict:
+    learning_graph = get_learning_profile_graph()
+    return learning_graph.invoke(
+        {
+            "learning_profile": learning_profile,
+            "knowledge_points": knowledge_points,
+            "score_payload": score_payload,
+            "resolved_domain": "",
+            "matched_entry": {},
+            "updated_entry": {},
         }
     )

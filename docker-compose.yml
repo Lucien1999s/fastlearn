@@ -29,6 +29,8 @@ services:
       CORS_ALLOW_ORIGINS: http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-lax}
+      SUPERUSER_EMAIL: ${SUPERUSER_EMAIL}
     ports:
       - "8000:8000"
     depends_on:

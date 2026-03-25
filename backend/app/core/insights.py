@@ -7,12 +7,19 @@ from typing import Any, Iterable
 DIFFICULTY_ORDER = ["very_easy", "easy", "medium", "hard", "very_hard"]
 QUESTION_TYPE_ORDER = ["是非題", "單選題", "多選題", "情境題", "錯題改寫"]
 ERROR_TYPE_ORDER = [
-    "基礎概念錯誤",
-    "漏關鍵點",
-    "推理不完整",
-    "誤選干擾選項",
-    "漏選正確選項",
+    "Foundational Concept Error",
+    "Key Point Omission",
+    "Incomplete Reasoning",
+    "Distractor Selection",
+    "Missed Correct Option",
 ]
+LEGACY_ERROR_TYPE_KEYS = {
+    "Foundational Concept Error": "基礎概念錯誤",
+    "Key Point Omission": "漏關鍵點",
+    "Incomplete Reasoning": "推理不完整",
+    "Distractor Selection": "誤選干擾選項",
+    "Missed Correct Option": "漏選正確選項",
+}
 
 
 def build_error_breakdown(score_result: dict[str, Any]) -> dict[str, int]:
@@ -30,11 +37,11 @@ def build_error_breakdown(score_result: dict[str, Any]) -> dict[str, int]:
             continue
 
         if question_type == "是非題":
-            counts["基礎概念錯誤"] += 1
+            counts["Foundational Concept Error"] += 1
             continue
 
         if question_type == "單選題":
-            counts["誤選干擾選項"] += 1
+            counts["Distractor Selection"] += 1
             continue
 
         if question_type == "多選題":
@@ -43,22 +50,22 @@ def build_error_breakdown(score_result: dict[str, Any]) -> dict[str, int]:
             wrong_selected = len(selected_values - correct_values)
             missed_correct = len(correct_values - selected_values)
 
-            counts["誤選干擾選項"] += wrong_selected
-            counts["漏選正確選項"] += missed_correct
+            counts["Distractor Selection"] += wrong_selected
+            counts["Missed Correct Option"] += missed_correct
             continue
 
         if question_type == "情境題":
             if rubric_band in (0, 25, 50):
-                counts["推理不完整"] += 1
+                counts["Incomplete Reasoning"] += 1
             else:
-                counts["漏關鍵點"] += 1
+                counts["Key Point Omission"] += 1
             continue
 
         if question_type == "錯題改寫":
             if rubric_band in (0, 25):
-                counts["基礎概念錯誤"] += 1
+                counts["Foundational Concept Error"] += 1
             else:
-                counts["漏關鍵點"] += 1
+                counts["Key Point Omission"] += 1
 
     return counts
 
@@ -152,7 +159,8 @@ def compute_error_type_breakdown(attempts: Iterable[Any], limit: int = 20) -> tu
     for attempt in recent_attempts:
         breakdown = attempt.error_breakdown or {}
         for error_type in ERROR_TYPE_ORDER:
-            count = int(breakdown.get(error_type, 0))
+            legacy_key = LEGACY_ERROR_TYPE_KEYS[error_type]
+            count = int(breakdown.get(error_type, breakdown.get(legacy_key, 0)))
             counts[error_type] += count
             total += count
 

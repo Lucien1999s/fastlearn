@@ -23,9 +23,13 @@ import {
 import { useEffect, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 
 import type {
+  AdminUserSummary,
   AuthUser,
+  DailyQuotaStatus,
   DifficultyLevel,
   LearningInsightsResponse,
+  LearningProfileOverviewItem,
+  LearningProfileResponse,
   QuestionItem,
   QuizHistoryItem,
   QuizScoreQuestionResult,
@@ -847,6 +851,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [personalizeModalOpen, setPersonalizeModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [clearDataConfirmOpen, setClearDataConfirmOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
@@ -869,13 +875,22 @@ export default function App() {
   const [isScoringQuiz, setIsScoringQuiz] = useState(false);
   const [isDownloadingDocument, setIsDownloadingDocument] = useState(false);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
+  const [isLoadingLearningProfile, setIsLoadingLearningProfile] = useState(false);
+  const [isLoadingAdminUsers, setIsLoadingAdminUsers] = useState(false);
+  const [isSavingAdminAccess, setIsSavingAdminAccess] = useState<string | null>(null);
+  const [isSavingLearningProfileSettings, setIsSavingLearningProfileSettings] = useState(false);
+  const [deletingLearningProfileDomain, setDeletingLearningProfileDomain] = useState<string | null>(null);
   const [quizPhase, setQuizPhase] = useState<QuizPhase>("answering");
   const [abilityChartMode, setAbilityChartMode] = useState<AbilityChartMode>("radar");
   const [downloadTarget, setDownloadTarget] = useState<DownloadDocumentType>("quiz");
   const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({});
   const [scoreResult, setScoreResult] = useState<QuizScoreResponse | null>(null);
   const [insights, setInsights] = useState<LearningInsightsResponse | null>(null);
+  const [learningProfile, setLearningProfile] = useState<LearningProfileResponse | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
+  const [adminError, setAdminError] = useState<string | null>(null);
   const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [learningProfileError, setLearningProfileError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -901,6 +916,11 @@ export default function App() {
     insights?.question_type_performance.map((item) => ({
       ...item,
       label: QUESTION_TYPE_LABELS[item.question_type] ?? item.question_type,
+    })) ?? [];
+  const learningProfileChartData =
+    insights?.learning_profile_overview.map((item: LearningProfileOverviewItem) => ({
+      ...item,
+      label: item.domain,
     })) ?? [];
 
   function hydrateQuiz(quiz: QuizWorkflowResponse) {
@@ -944,8 +964,11 @@ export default function App() {
     setHistory([]);
     setInsights(null);
     setInsightsError(null);
+    setLearningProfile(null);
+    setLearningProfileError(null);
     setMenuOpen(false);
     setAccountMenuOpen(false);
+    setPersonalizeModalOpen(false);
     setKnowledgeModalOpen(false);
     setInsightsModalOpen(false);
     setDownloadModalOpen(false);
@@ -1047,6 +1070,7 @@ export default function App() {
       resetComposer();
       setHistory([]);
       setInsights(null);
+      setLearningProfile(null);
       setInsightsError(null);
       setSettingsModalOpen(false);
       setClearDataConfirmOpen(false);
@@ -1199,6 +1223,7 @@ export default function App() {
       const nextHistory = history.filter((item) => item.id !== deleteTarget.id);
       setHistory(nextHistory);
       setInsights(null);
+      setLearningProfile(null);
       setDeleteTarget(null);
       setMenuOpen(false);
 
@@ -1254,6 +1279,156 @@ export default function App() {
       setInsightsError(message);
     } finally {
       setIsLoadingInsights(false);
+    }
+  }
+
+  async function handleOpenAdminModal() {
+    setAccountMenuOpen(false);
+    setAdminModalOpen(true);
+    setAdminError(null);
+
+    if (!currentUser?.is_admin || isLoadingAdminUsers) {
+      return;
+    }
+
+    setIsLoadingAdminUsers(true);
+    try {
+      const response = await fetchJson<AdminUserSummary[]>("/admin/users");
+      setAdminUsers(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load admin users.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setAdminError(message);
+    } finally {
+      setIsLoadingAdminUsers(false);
+    }
+  }
+
+  async function handleOpenPersonalizeModal() {
+    setAccountMenuOpen(false);
+    setPersonalizeModalOpen(true);
+    setLearningProfileError(null);
+
+    if (learningProfile || isLoadingLearningProfile) {
+      return;
+    }
+
+    setIsLoadingLearningProfile(true);
+    try {
+      const response = await fetchJson<LearningProfileResponse>("/learning-profile");
+      setLearningProfile(response);
+      if (currentUser) {
+        setCurrentUser({ ...currentUser, learning_profile_enabled: response.enabled });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load learning profile.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setLearningProfileError(message);
+    } finally {
+      setIsLoadingLearningProfile(false);
+    }
+  }
+
+  async function handleToggleLearningProfile(enabled: boolean) {
+    setIsSavingLearningProfileSettings(true);
+    setLearningProfileError(null);
+
+    try {
+      const response = await fetchJson<LearningProfileResponse>("/learning-profile/settings", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      setLearningProfile(response);
+      setInsights(null);
+      if (currentUser) {
+        setCurrentUser({ ...currentUser, learning_profile_enabled: response.enabled });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update learning profile settings.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setLearningProfileError(message);
+    } finally {
+      setIsSavingLearningProfileSettings(false);
+    }
+  }
+
+  async function handleDeleteLearningProfileEntry(domain: string) {
+    setDeletingLearningProfileDomain(domain);
+    setLearningProfileError(null);
+
+    try {
+      const response = await fetchJson<LearningProfileResponse>(
+        `/learning-profile/entries/${encodeURIComponent(domain)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      setLearningProfile(response);
+      setInsights(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to delete the learning profile entry.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setLearningProfileError(message);
+    } finally {
+      setDeletingLearningProfileDomain(null);
+    }
+  }
+
+  async function handleSaveAdminAccess(
+    user: AdminUserSummary,
+    changes: Partial<Pick<AdminUserSummary, "is_admin" | "daily_quiz_limit" | "daily_retake_limit">>,
+  ) {
+    const payload = {
+      is_admin: changes.is_admin ?? user.is_admin,
+      daily_quiz_limit: changes.daily_quiz_limit ?? user.daily_quiz_limit,
+      daily_retake_limit: changes.daily_retake_limit ?? user.daily_retake_limit,
+    };
+
+    setIsSavingAdminAccess(user.id);
+    setAdminError(null);
+
+    try {
+      const updatedUser = await fetchJson<AdminUserSummary>(`/admin/users/${user.id}/access`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      setAdminUsers((previous) => previous.map((item) => (item.id === user.id ? updatedUser : item)));
+      if (currentUser && currentUser.id === user.id) {
+        setCurrentUser({
+          ...currentUser,
+          is_admin: updatedUser.is_admin,
+          daily_quiz_limit: updatedUser.daily_quiz_limit,
+          daily_retake_limit: updatedUser.daily_retake_limit,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update user access.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setAdminError(message);
+    } finally {
+      setIsSavingAdminAccess(null);
     }
   }
 
@@ -1317,6 +1492,7 @@ export default function App() {
 
       setScoreResult(result);
       setInsights(null);
+      setLearningProfile(null);
       setQuizPhase("review");
       setCurrentQuiz((previous) =>
         previous && previous.id === currentQuiz.id
@@ -1366,20 +1542,36 @@ export default function App() {
     }
   }
 
-  function handleRetake() {
-    setQuizPhase("answering");
-    setUserAnswers({});
-    setScoreResult(null);
-    requestAnimationFrame(() => {
-      if (!panelRef.current || !questionsRef.current) {
+  async function handleRetake() {
+    if (!currentQuiz) {
+      return;
+    }
+
+    try {
+      await fetchJson<DailyQuotaStatus>(`/quizzes/${currentQuiz.id}/retake`, {
+        method: "POST",
+      });
+      setQuizPhase("answering");
+      setUserAnswers({});
+      setScoreResult(null);
+      requestAnimationFrame(() => {
+        if (!panelRef.current || !questionsRef.current) {
+          return;
+        }
+
+        panelRef.current.scrollTo({
+          top: Math.max(questionsRef.current.offsetTop - 88, 0),
+          behavior: "smooth",
+        });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to start a retake.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
         return;
       }
-
-      panelRef.current.scrollTo({
-        top: Math.max(questionsRef.current.offsetTop - 88, 0),
-        behavior: "smooth",
-      });
-    });
+      setErrorMessage(message);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1417,6 +1609,7 @@ export default function App() {
       setUserAnswers({});
       setScoreResult(null);
       setInsights(null);
+      setLearningProfile(null);
       shouldScrollToQuestionsRef.current = true;
       setHistory((previous) => [toHistoryItem(quiz), ...previous.filter((item) => item.id !== quiz.id)]);
     } catch (error) {
@@ -1640,6 +1833,14 @@ export default function App() {
                   </div>
 
                   <div className="account-menu__actions">
+                    {currentUser.is_admin && (
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenAdminModal()}
+                      >
+                        Admin Console
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -1650,9 +1851,7 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAccountMenuOpen(false);
-                      }}
+                      onClick={() => void handleOpenPersonalizeModal()}
                     >
                       Personalize
                     </button>
@@ -2118,6 +2317,26 @@ export default function App() {
                         </PieChart>
                       </ResponsiveContainer>
                     </InsightCard>
+
+                    <InsightCard
+                      title="Learning Domain Mastery"
+                      subtitle="Current domain-level mastery grades across your tracked study areas."
+                    >
+                      <ResponsiveContainer width="100%" height={320}>
+                        <BarChart data={learningProfileChartData} layout="vertical" margin={{ left: 24, right: 12 }}>
+                          <CartesianGrid stroke="rgba(148, 163, 184, 0.2)" horizontal={false} />
+                          <XAxis type="number" domain={[0, 100]} tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="label" tickLine={false} axisLine={false} width={150} />
+                          <Tooltip
+                            formatter={(value: number | string, _, payload) => {
+                              const entry = payload?.payload as LearningProfileOverviewItem | undefined;
+                              return [`${formatNumericMetric(value)} pts`, entry?.grade ? `Grade ${entry.grade}` : "Grade"];
+                            }}
+                          />
+                          <Bar dataKey="grade_score" radius={[0, 12, 12, 0]} fill="#0f766e" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </InsightCard>
                   </div>
                 ) : (
                   <div className="insights-empty">No submitted attempts yet.</div>
@@ -2228,6 +2447,247 @@ export default function App() {
                 >
                   {isDownloadingDocument ? "Preparing..." : "Download PDF"}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {personalizeModalOpen && currentUser && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setPersonalizeModalOpen(false)}
+          >
+            <div
+              className="modal-panel modal-panel--settings"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="personalize-modal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-panel__header">
+                <div>
+                  <p className="results__eyebrow">Mastery Profile</p>
+                  <h2 id="personalize-modal-title">Learning Domain Profile</h2>
+                </div>
+                <button
+                  type="button"
+                  className="modal-panel__close"
+                  onClick={() => setPersonalizeModalOpen(false)}
+                  aria-label="Close learning profile modal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="modal-panel__body modal-panel__body--settings">
+                <section className="settings-card">
+                  <div className="settings-card__identity settings-card__identity--split">
+                    <div>
+                      <h3>Automatic mastery updates</h3>
+                      <p>
+                        When enabled, each submitted quiz updates your domain-level mastery profile with
+                        a fresh status summary and letter grade.
+                      </p>
+                    </div>
+                    <label className="profile-toggle">
+                      <input
+                        type="checkbox"
+                        checked={learningProfile?.enabled ?? currentUser.learning_profile_enabled}
+                        disabled={isSavingLearningProfileSettings}
+                        onChange={(event) => void handleToggleLearningProfile(event.target.checked)}
+                      />
+                      <span className="profile-toggle__track" aria-hidden="true">
+                        <span className="profile-toggle__thumb" />
+                      </span>
+                      <span className="profile-toggle__label">
+                        {(learningProfile?.enabled ?? currentUser.learning_profile_enabled) ? "On" : "Off"}
+                      </span>
+                    </label>
+                  </div>
+                </section>
+
+                {isLoadingLearningProfile ? (
+                  <div className="insights-empty">
+                    <Spinner />
+                    <span>Loading learning profile...</span>
+                  </div>
+                ) : learningProfileError ? (
+                  <div className="insights-empty insights-empty--error">{learningProfileError}</div>
+                ) : learningProfile && learningProfile.entries.length > 0 ? (
+                  <div className="learning-profile-grid">
+                    {learningProfile.entries.map((entry) => (
+                      <article key={entry.domain} className="learning-profile-card">
+                        <div className="learning-profile-card__head">
+                          <div>
+                            <h3>{entry.domain}</h3>
+                            <p>{entry.status}</p>
+                          </div>
+                          <span className="learning-profile-card__grade">{entry.grade}</span>
+                        </div>
+                        <div className="learning-profile-card__footer">
+                          <span>Domain mastery snapshot</span>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={deletingLearningProfileDomain === entry.domain}
+                            onClick={() => void handleDeleteLearningProfileEntry(entry.domain)}
+                          >
+                            {deletingLearningProfileDomain === entry.domain ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="insights-empty">
+                    No learning-domain records yet. Submit a quiz to start building your mastery profile.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {adminModalOpen && currentUser?.is_admin && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setAdminModalOpen(false)}
+          >
+            <div
+              className="modal-panel modal-panel--insights modal-panel--admin"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="admin-modal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-panel__header">
+                <div>
+                  <p className="results__eyebrow">Admin Console</p>
+                  <h2 id="admin-modal-title">User Access Control</h2>
+                </div>
+                <button
+                  type="button"
+                  className="modal-panel__close"
+                  onClick={() => setAdminModalOpen(false)}
+                  aria-label="Close admin modal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="modal-panel__body">
+                {isLoadingAdminUsers ? (
+                  <div className="insights-empty">
+                    <Spinner />
+                    <span>Loading all users...</span>
+                  </div>
+                ) : adminError ? (
+                  <div className="insights-empty insights-empty--error">{adminError}</div>
+                ) : (
+                  <div className="admin-grid">
+                    {adminUsers.map((user) => (
+                      <article key={user.id} className="admin-user-card">
+                        <div className="admin-user-card__head">
+                          <div>
+                            <h3>{user.name}</h3>
+                            <p>{user.email}</p>
+                          </div>
+                          <div className="results__chips">
+                            <span>{user.is_admin ? "Admin" : "User"}</span>
+                            <span>{user.plan}</span>
+                          </div>
+                        </div>
+
+                        <div className="admin-user-card__metrics">
+                          <div>
+                            <span>Today Quiz Runs</span>
+                            <strong>
+                              {user.quizzes_generated_today} / {user.daily_quiz_limit}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>Today Retakes</span>
+                            <strong>
+                              {user.retakes_today} / {user.daily_retake_limit}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>Total Quizzes</span>
+                            <strong>{user.total_quizzes}</strong>
+                          </div>
+                          <div>
+                            <span>Total Attempts</span>
+                            <strong>{user.total_attempts}</strong>
+                          </div>
+                        </div>
+
+                        <div className="admin-user-card__controls">
+                          <label className="field field--compact">
+                            <span>Quiz Limit / Day</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={user.daily_quiz_limit}
+                              onChange={(event) => {
+                                const nextValue = Math.max(0, Number(event.target.value || 0));
+                                setAdminUsers((previous) =>
+                                  previous.map((item) =>
+                                    item.id === user.id ? { ...item, daily_quiz_limit: nextValue } : item,
+                                  ),
+                                );
+                              }}
+                            />
+                          </label>
+
+                          <label className="field field--compact">
+                            <span>Retake Limit / Day</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={user.daily_retake_limit}
+                              onChange={(event) => {
+                                const nextValue = Math.max(0, Number(event.target.value || 0));
+                                setAdminUsers((previous) =>
+                                  previous.map((item) =>
+                                    item.id === user.id ? { ...item, daily_retake_limit: nextValue } : item,
+                                  ),
+                                );
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <div className="admin-user-card__footer">
+                          <label className="admin-toggle">
+                            <input
+                              type="checkbox"
+                              checked={user.is_admin}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setAdminUsers((previous) =>
+                                  previous.map((item) =>
+                                    item.id === user.id ? { ...item, is_admin: checked } : item,
+                                  ),
+                                );
+                              }}
+                            />
+                            <span>Admin access</span>
+                          </label>
+                          <button
+                            type="button"
+                            className="submit-button"
+                            disabled={isSavingAdminAccess === user.id}
+                            onClick={() => void handleSaveAdminAccess(user, {})}
+                          >
+                            {isSavingAdminAccess === user.id ? "Saving..." : "Save Access"}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

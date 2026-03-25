@@ -70,3 +70,13 @@ def get_session_max_age_seconds() -> int:
 def get_session_cookie_secure() -> bool:
     raw_value = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower()
     return raw_value in {"1", "true", "yes", "on"}
+
+
+@lru_cache(maxsize=1)
+def get_session_cookie_samesite() -> str:
+    return os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+
+
+@lru_cache(maxsize=1)
+def get_superuser_email() -> str:
+    return os.getenv("SUPERUSER_EMAIL", "").strip().lower()

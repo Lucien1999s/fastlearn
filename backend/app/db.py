@@ -6,17 +6,24 @@ from secrets import token_urlsafe
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine, delete, func, inspect, select, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, delete, func, inspect, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .config import get_database_url, get_session_max_age_seconds
+from .config import get_database_url, get_session_max_age_seconds, get_superuser_email
 
 MAX_TITLE_LENGTH = 20
+DEFAULT_DAILY_QUIZ_LIMIT = 5
+DEFAULT_DAILY_RETAKE_LIMIT = 5
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def start_of_current_utc_day() -> datetime:
+    now = utcnow()
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 class Base(DeclarativeBase):
@@ -32,6 +39,12 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     picture_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    daily_quiz_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_DAILY_QUIZ_LIMIT)
+    daily_retake_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_DAILY_RETAKE_LIMIT)
+    learning_profile_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    learning_profile: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -106,6 +119,25 @@ class QuizAttempt(Base):
     )
 
 
+class QuizGenerationEvent(Base):
+    __tablename__ = "quiz_generation_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    quiz_record_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class QuizRetakeEvent(Base):
+    __tablename__ = "quiz_retake_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    quiz_record_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 engine = create_engine(get_database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
@@ -113,6 +145,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 def init_database() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_database_schema()
+    _sync_superuser_flag()
 
 
 def _ensure_database_schema() -> None:
@@ -140,6 +173,22 @@ def _ensure_database_schema() -> None:
         existing_user_columns = {column["name"] for column in inspector.get_columns("users")}
         if "plan" not in existing_user_columns:
             statements.append("ALTER TABLE users ADD COLUMN plan VARCHAR(20) NOT NULL DEFAULT 'free'")
+        if "is_admin" not in existing_user_columns:
+            statements.append("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+        if "daily_quiz_limit" not in existing_user_columns:
+            statements.append(
+                f"ALTER TABLE users ADD COLUMN daily_quiz_limit INTEGER NOT NULL DEFAULT {DEFAULT_DAILY_QUIZ_LIMIT}"
+            )
+        if "daily_retake_limit" not in existing_user_columns:
+            statements.append(
+                f"ALTER TABLE users ADD COLUMN daily_retake_limit INTEGER NOT NULL DEFAULT {DEFAULT_DAILY_RETAKE_LIMIT}"
+            )
+        if "learning_profile_enabled" not in existing_user_columns:
+            statements.append("ALTER TABLE users ADD COLUMN learning_profile_enabled BOOLEAN NOT NULL DEFAULT TRUE")
+        if "learning_profile" not in existing_user_columns:
+            statements.append("ALTER TABLE users ADD COLUMN learning_profile JSONB NOT NULL DEFAULT '[]'::jsonb")
+        if "last_login_at" not in existing_user_columns:
+            statements.append("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP WITH TIME ZONE")
         if "updated_at" not in existing_user_columns:
             statements.append(
                 "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
@@ -151,6 +200,24 @@ def _ensure_database_schema() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+def _sync_superuser_flag() -> None:
+    superuser_email = get_superuser_email()
+    if not superuser_email:
+        return
+
+    with SessionLocal() as session:
+        users = list(session.scalars(select(User)).all())
+        changed = False
+        for user in users:
+            should_be_admin = user.email.lower() == superuser_email or user.is_admin
+            if user.email.lower() == superuser_email and not user.is_admin:
+                user.is_admin = True
+                session.add(user)
+                changed = True
+        if changed:
+            session.commit()
 
 
 def get_db_session():
@@ -185,6 +252,7 @@ def upsert_google_user(
 ) -> User:
     statement = select(User).where(User.google_sub == google_sub)
     user = session.scalars(statement).first()
+    is_superuser = email.strip().lower() == get_superuser_email()
 
     if user is None:
         user = User(
@@ -192,12 +260,15 @@ def upsert_google_user(
             email=email,
             name=name,
             picture_url=picture_url,
+            is_admin=is_superuser,
             updated_at=utcnow(),
         )
     else:
         user.email = email
         user.name = name
         user.picture_url = picture_url
+        if is_superuser:
+            user.is_admin = True
         user.updated_at = utcnow()
 
     session.add(user)
@@ -208,6 +279,10 @@ def upsert_google_user(
 
 def create_user_session(session: Session, *, user_id: str) -> str:
     raw_token = token_urlsafe(48)
+    user = session.get(User, user_id)
+    if user is not None:
+        user.last_login_at = utcnow()
+        session.add(user)
     session_record = UserSession(
         user_id=user_id,
         token_hash=hash_session_token(raw_token),
@@ -278,6 +353,129 @@ def list_scored_quiz_records_for_user(session: Session, user_id: str) -> list[Qu
 def list_quiz_attempts_for_user(session: Session, user_id: str) -> list[QuizAttempt]:
     statement = select(QuizAttempt).where(QuizAttempt.user_id == user_id).order_by(QuizAttempt.created_at.asc())
     return list(session.scalars(statement).all())
+
+
+def count_quiz_generations_today(session: Session, user_id: str) -> int:
+    start_of_day = start_of_current_utc_day()
+    statement = select(func.count()).select_from(QuizGenerationEvent).where(
+        QuizGenerationEvent.user_id == user_id,
+        QuizGenerationEvent.created_at >= start_of_day,
+    )
+    return int(session.scalar(statement) or 0)
+
+
+def count_quiz_retakes_today(session: Session, user_id: str) -> int:
+    start_of_day = start_of_current_utc_day()
+    statement = select(func.count()).select_from(QuizRetakeEvent).where(
+        QuizRetakeEvent.user_id == user_id,
+        QuizRetakeEvent.created_at >= start_of_day,
+    )
+    return int(session.scalar(statement) or 0)
+
+
+def record_quiz_generation(session: Session, *, user_id: str, quiz_record_id: str, action: str) -> None:
+    session.add(
+        QuizGenerationEvent(
+            user_id=user_id,
+            quiz_record_id=quiz_record_id,
+            action=action,
+        )
+    )
+    session.commit()
+
+
+def record_quiz_retake(session: Session, *, user_id: str, quiz_record_id: str) -> None:
+    session.add(
+        QuizRetakeEvent(
+            user_id=user_id,
+            quiz_record_id=quiz_record_id,
+        )
+    )
+    session.commit()
+
+
+def list_all_users(session: Session) -> list[User]:
+    return list(session.scalars(select(User).order_by(User.created_at.asc())).all())
+
+
+def get_user_by_id(session: Session, user_id: str) -> User | None:
+    return session.get(User, user_id)
+
+
+def count_total_quizzes_for_user(session: Session, user_id: str) -> int:
+    statement = select(func.count()).select_from(QuizRecord).where(QuizRecord.user_id == user_id)
+    return int(session.scalar(statement) or 0)
+
+
+def count_total_attempts_for_user(session: Session, user_id: str) -> int:
+    statement = select(func.count()).select_from(QuizAttempt).where(QuizAttempt.user_id == user_id)
+    return int(session.scalar(statement) or 0)
+
+
+def update_user_access(
+    session: Session,
+    user: User,
+    *,
+    is_admin: bool,
+    daily_quiz_limit: int,
+    daily_retake_limit: int,
+) -> User:
+    user.is_admin = is_admin or user.email.lower() == get_superuser_email()
+    user.daily_quiz_limit = daily_quiz_limit
+    user.daily_retake_limit = daily_retake_limit
+    user.updated_at = utcnow()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+def update_learning_profile_settings(session: Session, user: User, *, enabled: bool) -> User:
+    user.learning_profile_enabled = enabled
+    user.updated_at = utcnow()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+def upsert_learning_profile_entry(
+    session: Session,
+    user: User,
+    *,
+    domain: str,
+    status: str,
+    grade: str,
+) -> User:
+    entries = list(user.learning_profile or [])
+    next_entries: list[dict[str, Any]] = []
+    updated = False
+
+    for entry in entries:
+        if entry.get("domain") == domain:
+            next_entries.append({"domain": domain, "status": status, "grade": grade})
+            updated = True
+        else:
+            next_entries.append(entry)
+
+    if not updated:
+        next_entries.append({"domain": domain, "status": status, "grade": grade})
+
+    user.learning_profile = next_entries
+    user.updated_at = utcnow()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+def delete_learning_profile_entry(session: Session, user: User, *, domain: str) -> User:
+    user.learning_profile = [entry for entry in (user.learning_profile or []) if entry.get("domain") != domain]
+    user.updated_at = utcnow()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
 
 
 def get_quiz_record_for_user(session: Session, *, user_id: str, quiz_id: str) -> QuizRecord | None:
@@ -390,12 +588,20 @@ def update_quiz_title(session: Session, record: QuizRecord, title: str) -> QuizR
 
 
 def delete_quiz_record(session: Session, record: QuizRecord) -> None:
+    session.execute(delete(QuizRetakeEvent).where(QuizRetakeEvent.quiz_record_id == record.id))
+    session.execute(delete(QuizGenerationEvent).where(QuizGenerationEvent.quiz_record_id == record.id))
     session.execute(delete(QuizAttempt).where(QuizAttempt.quiz_record_id == record.id))
     session.delete(record)
     session.commit()
 
 
 def clear_user_data(session: Session, user_id: str) -> None:
+    session.execute(delete(QuizRetakeEvent).where(QuizRetakeEvent.user_id == user_id))
+    session.execute(delete(QuizGenerationEvent).where(QuizGenerationEvent.user_id == user_id))
     session.execute(delete(QuizAttempt).where(QuizAttempt.user_id == user_id))
     session.execute(delete(QuizRecord).where(QuizRecord.user_id == user_id))
+    user = session.get(User, user_id)
+    if user is not None:
+        user.learning_profile = []
+        session.add(user)
     session.commit()

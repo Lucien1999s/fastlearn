@@ -13,6 +13,7 @@ from .config import (
     get_google_client_id,
     get_session_cookie_name,
     get_session_cookie_secure,
+    get_session_cookie_samesite,
     get_session_max_age_seconds,
 )
 from .db import (
@@ -42,6 +43,10 @@ class AuthUserResponse(BaseModel):
     name: str
     picture_url: str | None
     plan: str
+    is_admin: bool
+    daily_quiz_limit: int
+    daily_retake_limit: int
+    learning_profile_enabled: bool
 
 
 def serialize_auth_user(user: User) -> AuthUserResponse:
@@ -51,6 +56,10 @@ def serialize_auth_user(user: User) -> AuthUserResponse:
         name=user.name,
         picture_url=user.picture_url,
         plan=user.plan,
+        is_admin=user.is_admin,
+        daily_quiz_limit=user.daily_quiz_limit,
+        daily_retake_limit=user.daily_retake_limit,
+        learning_profile_enabled=user.learning_profile_enabled,
     )
 
 
@@ -62,7 +71,7 @@ def _set_session_cookie(response: Response, raw_token: str) -> None:
         max_age=max_age,
         httponly=True,
         secure=get_session_cookie_secure(),
-        samesite="lax",
+        samesite=get_session_cookie_samesite(),
         path="/",
     )
 
@@ -71,7 +80,7 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(
         key=get_session_cookie_name(),
         secure=get_session_cookie_secure(),
-        samesite="lax",
+        samesite=get_session_cookie_samesite(),
         path="/",
     )
 
@@ -89,6 +98,15 @@ def get_current_user(request: Request, db: DbSession) -> User:
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_admin(current_user: CurrentUser) -> User:
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return current_user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]
 
 
 @router.post(

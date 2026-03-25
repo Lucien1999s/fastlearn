@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 QuestionType = Literal["是非題", "單選題", "多選題", "情境題", "錯題改寫"]
 DifficultyLevel = Literal["very_easy", "easy", "medium", "hard", "very_hard"]
 ScoreBand = Literal[0, 25, 50, 75, 100]
+LearningGrade = Literal["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"]
 
 ALLOWED_DIFFICULTIES = {"very_easy", "easy", "medium", "hard", "very_hard"}
 
@@ -48,6 +49,21 @@ class JudgeResultSchema(BaseModel):
     score: ScoreBand = Field(description="評分等級")
 
 
+class LearningProfileEntrySchema(BaseModel):
+    domain: str = Field(description="大領域名稱，不要切成細碎子概念")
+    status: str = Field(description="一兩句對該領域目前學習狀況的敘述")
+    grade: LearningGrade = Field(description="該領域目前的整體評等")
+
+
+class LearningProfileDomainResolutionSchema(BaseModel):
+    domain: str = Field(description="本次考試範圍所屬的大領域")
+
+
+class LearningProfileUpdateSchema(BaseModel):
+    status: str = Field(description="一兩句對該領域目前學習狀況的敘述")
+    grade: LearningGrade = Field(description="該領域目前的整體評等")
+
+
 class QuizState(TypedDict):
     content: str
     difficulty: str
@@ -56,3 +72,12 @@ class QuizState(TypedDict):
     summary: dict
     spec: dict
     questions: list[dict]
+
+
+class LearningProfileState(TypedDict):
+    learning_profile: list[dict]
+    knowledge_points: list[str]
+    score_payload: dict
+    resolved_domain: str
+    matched_entry: dict
+    updated_entry: dict
