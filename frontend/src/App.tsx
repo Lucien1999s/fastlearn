@@ -1,9 +1,31 @@
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { useEffect, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 
 import type {
+  AuthUser,
   DifficultyLevel,
+  LearningInsightsResponse,
   QuestionItem,
   QuizHistoryItem,
   QuizScoreQuestionResult,
@@ -15,9 +37,16 @@ type QuizPhase = "answering" | "review";
 type UserAnswer = string | string[];
 type ChoiceStatus = "neutral" | "selected" | "correct" | "missed" | "incorrect";
 type DownloadDocumentType = "quiz" | "report";
+type AbilityChartMode = "radar" | "bars";
+type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+type AuthMode = "login" | "signup";
 
+const APP_ORIGIN =
+  typeof window === "undefined" ? { protocol: "http:", hostname: "127.0.0.1" } : window.location;
+const DEFAULT_API_BASE_URL = `${APP_ORIGIN.protocol}//${APP_ORIGIN.hostname || "127.0.0.1"}:8000/api`;
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000/api";
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? DEFAULT_API_BASE_URL;
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? "";
 
 const DIFFICULTY_OPTIONS: Array<{ value: DifficultyLevel; label: string }> = [
   { value: "very_easy", label: "Very Easy" },
@@ -29,7 +58,7 @@ const DIFFICULTY_OPTIONS: Array<{ value: DifficultyLevel; label: string }> = [
 
 const MAX_CONTENT_LENGTH = 10000;
 const MAX_QUESTION_COUNT = 25;
-const MAX_TITLE_LENGTH = 15;
+const MAX_TITLE_LENGTH = 20;
 const DEFAULT_PREFERENCE = "";
 const DEFAULT_NUMBERS = "10";
 
@@ -41,8 +70,21 @@ const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
   very_hard: "Very Hard",
 };
 
+const QUESTION_TYPE_LABELS: Record<string, string> = {
+  "是非題": "True / False",
+  "單選題": "Single Choice",
+  "多選題": "Multiple Choice",
+  "情境題": "Scenario",
+  "錯題改寫": "Rewrite",
+};
+
+const ERROR_COLORS = ["#2563eb", "#14b8a6", "#f97316", "#ef4444", "#a855f7"];
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    ...init,
+  });
   const contentType = response.headers.get("content-type") ?? "";
   const rawBody = response.status === 204 ? "" : await response.text();
   const payload =
@@ -71,6 +113,15 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function getInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "FL";
+}
+
 function summarizeAnswer(answer: string | string[]): string {
   return Array.isArray(answer) ? answer.join(", ") : answer;
 }
@@ -81,6 +132,11 @@ function formatQuestionCount(count: number): string {
 
 function formatScoreValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function formatNumericMetric(value: number | string): string {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numericValue) ? formatScoreValue(numericValue) : String(value);
 }
 
 function normalizeSubmittedAnswers(
@@ -107,6 +163,136 @@ function toHistoryItem(quiz: QuizWorkflowResponse): QuizHistoryItem {
     numbers: quiz.numbers,
     created_at: quiz.created_at,
   };
+}
+
+function formatChartDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
+function InsightCard({
+  title,
+  subtitle,
+  children,
+  actions,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <section className="insight-card">
+      <div className="insight-card__header">
+        <div>
+          <h3>{title}</h3>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        {actions && <div className="insight-card__actions">{actions}</div>}
+      </div>
+      <div className="insight-card__body">{children}</div>
+    </section>
+  );
+}
+
+function UserAvatar({ user, className }: { user: AuthUser; className?: string }) {
+  if (user.picture_url) {
+    return <img className={className} src={user.picture_url} alt={user.name} referrerPolicy="no-referrer" />;
+  }
+
+  return <span className={className}>{getInitials(user.name)}</span>;
+}
+
+function AuthScreen({
+  mode,
+  authError,
+  isAuthenticating,
+  onModeChange,
+  googleButtonRef,
+}: {
+  mode: AuthMode;
+  authError: string | null;
+  isAuthenticating: boolean;
+  onModeChange: (mode: AuthMode) => void;
+  googleButtonRef: MutableRefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-hero">
+        <div className="auth-hero__badge">Fastlearn</div>
+        <h1>Turn dense study notes into focused quizzes with durable progress tracking.</h1>
+        <p>
+          Sign in once with Google, keep your browser session, and store quizzes, scores, and insights
+          under your own workspace.
+        </p>
+        <div className="auth-hero__grid">
+          <article>
+            <span>Google login</span>
+            <p>Verified Google sign-in with persistent browser sessions.</p>
+          </article>
+          <article>
+            <span>Personal workspace</span>
+            <p>Your quizzes, attempts, scores, and analytics stay scoped to your account.</p>
+          </article>
+          <article>
+            <span>Study continuity</span>
+            <p>Return to the same workspace after refresh without signing in again.</p>
+          </article>
+        </div>
+      </section>
+
+      <section className="auth-card">
+        <p className="results__eyebrow">{mode === "login" ? "Login" : "Sign Up"}</p>
+        <h2>{mode === "login" ? "Welcome back to Fastlearn" : "Create your Fastlearn workspace"}</h2>
+        <p className="auth-card__copy">
+          {mode === "login"
+            ? "Use your Google account to continue where you left off."
+            : "Use your Google account to create a personal learning workspace."}
+        </p>
+
+        <div className="segmented-control segmented-control--auth">
+          <button
+            type="button"
+            className={mode === "login" ? "is-active" : ""}
+            onClick={() => onModeChange("login")}
+          >
+            Login
+          </button>
+          <button
+            type="button"
+            className={mode === "signup" ? "is-active" : ""}
+            onClick={() => onModeChange("signup")}
+          >
+            Sign Up
+          </button>
+        </div>
+
+        <div className="auth-google-slot">
+          {GOOGLE_CLIENT_ID ? (
+            <div
+              ref={(node) => {
+                googleButtonRef.current = node;
+              }}
+            />
+          ) : (
+            <div className="auth-card__warning">
+              Missing <code>VITE_GOOGLE_CLIENT_ID</code>. Add it to your frontend environment first.
+            </div>
+          )}
+        </div>
+
+        {isAuthenticating && (
+          <div className="auth-card__status">
+            <Spinner />
+            <span>Signing you in...</span>
+          </div>
+        )}
+        {authError && <div className="alert-banner">{authError}</div>}
+      </section>
+    </main>
+  );
 }
 
 function Spinner() {
@@ -654,9 +840,17 @@ function QuestionCard({
 }
 
 export default function App() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [clearDataConfirmOpen, setClearDataConfirmOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
+  const [insightsModalOpen, setInsightsModalOpen] = useState(false);
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [history, setHistory] = useState<QuizHistoryItem[]>([]);
@@ -674,57 +868,40 @@ export default function App() {
   const [isDeletingQuiz, setIsDeletingQuiz] = useState(false);
   const [isScoringQuiz, setIsScoringQuiz] = useState(false);
   const [isDownloadingDocument, setIsDownloadingDocument] = useState(false);
+  const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [quizPhase, setQuizPhase] = useState<QuizPhase>("answering");
+  const [abilityChartMode, setAbilityChartMode] = useState<AbilityChartMode>("radar");
   const [downloadTarget, setDownloadTarget] = useState<DownloadDocumentType>("quiz");
   const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({});
   const [scoreResult, setScoreResult] = useState<QuizScoreResponse | null>(null);
+  const [insights, setInsights] = useState<LearningInsightsResponse | null>(null);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isClearingData, setIsClearingData] = useState(false);
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   const questionsRef = useRef<HTMLElement | null>(null);
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToQuestionsRef = useRef(false);
   const availableReport = scoreResult ?? currentQuiz?.score_result ?? null;
-
-  useEffect(() => {
-    let active = true;
-
-    async function bootstrap() {
-      setIsLoadingHistory(true);
-      setErrorMessage(null);
-
-      try {
-        const items = await fetchJson<QuizHistoryItem[]>("/quizzes");
-        if (!active) {
-          return;
-        }
-
-        setHistory(items);
-
-        if (items.length > 0) {
-          const detail = await fetchJson<QuizWorkflowResponse>(`/quizzes/${items[0].id}`);
-          if (!active) {
-            return;
-          }
-
-          hydrateQuiz(detail);
-        }
-      } catch (error) {
-        if (active) {
-          setErrorMessage(error instanceof Error ? error.message : "Unable to load quiz history.");
-        }
-      } finally {
-        if (active) {
-          setIsLoadingHistory(false);
-        }
-      }
-    }
-
-    void bootstrap();
-
-    return () => {
-      active = false;
-    };
-  }, []);
+  const trendData =
+    insights?.history_trend.map((item) => ({
+      ...item,
+      label: formatChartDate(item.attempted_at),
+      fullLabel: formatDate(item.attempted_at),
+    })) ?? [];
+  const difficultyData =
+    insights?.difficulty_performance.map((item) => ({
+      ...item,
+      label: DIFFICULTY_LABELS[item.difficulty],
+    })) ?? [];
+  const questionTypeData =
+    insights?.question_type_performance.map((item) => ({
+      ...item,
+      label: QUESTION_TYPE_LABELS[item.question_type] ?? item.question_type,
+    })) ?? [];
 
   function hydrateQuiz(quiz: QuizWorkflowResponse) {
     const persistedAnswers = normalizeSubmittedAnswers(quiz.submitted_answers);
@@ -753,6 +930,7 @@ export default function App() {
     setTitleDraft("");
     setErrorMessage(null);
     setMenuOpen(false);
+    setAccountMenuOpen(false);
     setKnowledgeModalOpen(false);
     setDownloadModalOpen(false);
     setDeleteTarget(null);
@@ -761,6 +939,184 @@ export default function App() {
     setScoreResult(null);
     panelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
+
+  function resetWorkspaceState() {
+    setHistory([]);
+    setInsights(null);
+    setInsightsError(null);
+    setMenuOpen(false);
+    setAccountMenuOpen(false);
+    setKnowledgeModalOpen(false);
+    setInsightsModalOpen(false);
+    setDownloadModalOpen(false);
+    setSettingsModalOpen(false);
+    setClearDataConfirmOpen(false);
+    resetComposer();
+  }
+
+  function handleSessionExpired(message = "Your session has expired. Please sign in again.") {
+    setAuthStatus("unauthenticated");
+    setCurrentUser(null);
+    setAuthError(message);
+    resetWorkspaceState();
+  }
+
+  async function loadWorkspace() {
+    setIsLoadingHistory(true);
+    setErrorMessage(null);
+
+    try {
+      const items = await fetchJson<QuizHistoryItem[]>("/quizzes");
+      setHistory(items);
+
+      if (items.length > 0) {
+        const detail = await fetchJson<QuizWorkflowResponse>(`/quizzes/${items[0].id}`);
+        hydrateQuiz(detail);
+      } else {
+        resetComposer();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load quiz history.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }
+
+  async function handleGoogleAuthenticate(credential: string) {
+    setIsAuthenticating(true);
+    setAuthError(null);
+
+    try {
+      const user = await fetchJson<AuthUser>("/auth/google", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ credential }),
+      });
+
+      setCurrentUser(user);
+      setAuthStatus("authenticated");
+      await loadWorkspace();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to sign in with Google.");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function handleLogout() {
+    if (isLoggingOut) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+
+    try {
+      await fetchJson<null>("/auth/logout", {
+        method: "POST",
+      });
+    } catch {
+      // A missing or expired backend session should still log the user out locally.
+    } finally {
+      window.google?.accounts.id.disableAutoSelect();
+      setCurrentUser(null);
+      setAuthStatus("unauthenticated");
+      setAuthError(null);
+      resetWorkspaceState();
+      setIsLoggingOut(false);
+    }
+  }
+
+  async function handleClearAllDataConfirmed() {
+    if (isClearingData) {
+      return;
+    }
+
+    setIsClearingData(true);
+
+    try {
+      await fetchJson<null>("/auth/me/data", {
+        method: "DELETE",
+      });
+      resetComposer();
+      setHistory([]);
+      setInsights(null);
+      setInsightsError(null);
+      setSettingsModalOpen(false);
+      setClearDataConfirmOpen(false);
+      setErrorMessage(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to clear your data.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
+    } finally {
+      setIsClearingData(false);
+    }
+  }
+
+  useEffect(() => {
+    void (async () => {
+      setAuthStatus("loading");
+      setAuthError(null);
+
+      try {
+        const user = await fetchJson<AuthUser>("/auth/me");
+        setCurrentUser(user);
+        setAuthStatus("authenticated");
+        await loadWorkspace();
+      } catch {
+        setCurrentUser(null);
+        setAuthStatus("unauthenticated");
+        setIsLoadingHistory(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "unauthenticated" || !googleButtonRef.current || !GOOGLE_CLIENT_ID) {
+      return;
+    }
+
+    const googleIdentity = window.google?.accounts.id;
+    if (!googleIdentity) {
+      return;
+    }
+
+    googleButtonRef.current.innerHTML = "";
+    googleIdentity.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (response) => {
+        if (response.credential) {
+          void handleGoogleAuthenticate(response.credential);
+        }
+      },
+      auto_select: false,
+      cancel_on_tap_outside: true,
+    });
+    googleIdentity.renderButton(googleButtonRef.current, {
+      theme: "outline",
+      size: "large",
+      shape: "pill",
+      text: authMode === "signup" ? "signup_with" : "signin_with",
+      logo_alignment: "left",
+      width: 320,
+    });
+
+    return () => {
+      if (googleButtonRef.current) {
+        googleButtonRef.current.innerHTML = "";
+      }
+    };
+  }, [authMode, authStatus]);
 
   async function handleSelectHistoryItem(quizId: string) {
     setSelectedQuizId(quizId);
@@ -771,9 +1127,15 @@ export default function App() {
       const detail = await fetchJson<QuizWorkflowResponse>(`/quizzes/${quizId}`);
       hydrateQuiz(detail);
       setMenuOpen(false);
+      setAccountMenuOpen(false);
       panelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to load the selected quiz.");
+      const message = error instanceof Error ? error.message : "Unable to load the selected quiz.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
     }
   }
 
@@ -811,7 +1173,12 @@ export default function App() {
       setEditingTitleId(null);
       setTitleDraft("");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update title.");
+      const message = error instanceof Error ? error.message : "Unable to update title.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
     } finally {
       setIsSavingTitle(false);
     }
@@ -831,6 +1198,7 @@ export default function App() {
 
       const nextHistory = history.filter((item) => item.id !== deleteTarget.id);
       setHistory(nextHistory);
+      setInsights(null);
       setDeleteTarget(null);
       setMenuOpen(false);
 
@@ -842,7 +1210,12 @@ export default function App() {
         }
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to delete quiz.");
+      const message = error instanceof Error ? error.message : "Unable to delete quiz.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
     } finally {
       setIsDeletingQuiz(false);
     }
@@ -855,6 +1228,33 @@ export default function App() {
 
     setDownloadTarget("quiz");
     setDownloadModalOpen(true);
+  }
+
+  async function handleOpenInsightsModal() {
+    setMenuOpen(false);
+    setAccountMenuOpen(false);
+    setInsightsModalOpen(true);
+    setInsightsError(null);
+
+    if (insights || isLoadingInsights) {
+      return;
+    }
+
+    setIsLoadingInsights(true);
+
+    try {
+      const response = await fetchJson<LearningInsightsResponse>("/insights");
+      setInsights(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load insights.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setInsightsError(message);
+    } finally {
+      setIsLoadingInsights(false);
+    }
   }
 
   function handleSingleAnswer(questionIndex: number, value: string) {
@@ -916,6 +1316,7 @@ export default function App() {
       });
 
       setScoreResult(result);
+      setInsights(null);
       setQuizPhase("review");
       setCurrentQuiz((previous) =>
         previous && previous.id === currentQuiz.id
@@ -929,7 +1330,12 @@ export default function App() {
         });
       });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Quiz scoring failed.");
+      const message = error instanceof Error ? error.message : "Quiz scoring failed.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
     } finally {
       setIsScoringQuiz(false);
     }
@@ -1010,10 +1416,16 @@ export default function App() {
       setQuizPhase("answering");
       setUserAnswers({});
       setScoreResult(null);
+      setInsights(null);
       shouldScrollToQuestionsRef.current = true;
       setHistory((previous) => [toHistoryItem(quiz), ...previous.filter((item) => item.id !== quiz.id)]);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Quiz generation failed.");
+      const message = error instanceof Error ? error.message : "Quiz generation failed.";
+      if (message === "Authentication required." || message === "Session expired.") {
+        handleSessionExpired();
+        return;
+      }
+      setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -1045,6 +1457,32 @@ export default function App() {
       });
     });
   }, [currentQuiz]);
+
+  if (authStatus === "loading") {
+    return (
+      <div className="app-loader">
+        <div className="app-loader__panel">
+          <span className="workspace__wordmark">Fastlearn</span>
+          <div className="auth-card__status">
+            <Spinner />
+            <span>Restoring your workspace...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated") {
+    return (
+      <AuthScreen
+        mode={authMode}
+        authError={authError}
+        isAuthenticating={isAuthenticating}
+        onModeChange={setAuthMode}
+        googleButtonRef={googleButtonRef}
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -1174,7 +1612,7 @@ export default function App() {
                         >
                           <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path
-                              d="M4 15.75V20h4.25L19.06 9.19l-4.25-4.25L4 15.75Zm12.92-9.83 2.16-2.16a1.5 1.5 0 0 1 2.12 0l1.04 1.04a1.5 1.5 0 0 1 0 2.12l-2.16 2.16-3.16-3.16Z"
+                              d="M15.672 3.462a2.25 2.25 0 0 1 3.182 0l1.684 1.684a2.25 2.25 0 0 1 0 3.182l-9.91 9.91a4.5 4.5 0 0 1-1.897 1.118l-3.03.866a.75.75 0 0 1-.928-.928l.866-3.03a4.5 4.5 0 0 1 1.118-1.897l9.91-9.91Zm1.06 1.06-9.91 9.91a3 3 0 0 0-.746 1.264l-.55 1.922 1.922-.55a3 3 0 0 0 1.264-.746l9.91-9.91a.75.75 0 0 0 0-1.06l-1.684-1.684a.75.75 0 0 0-1.06 0Z"
                               fill="currentColor"
                             />
                           </svg>
@@ -1187,6 +1625,77 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {currentUser && (
+          <div className="sidebar__footer">
+            <div className="menu-anchor menu-anchor--account">
+              {accountMenuOpen && (
+                <div className="account-menu">
+                  <div className="account-menu__identity">
+                    <UserAvatar user={currentUser} className="account-menu__avatar" />
+                    <div>
+                      <strong>{currentUser.name}</strong>
+                      <span>{currentUser.email}</span>
+                    </div>
+                  </div>
+
+                  <div className="account-menu__actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                      }}
+                    >
+                      Upgrade Plan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                      }}
+                    >
+                      Personalize
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        setSettingsModalOpen(true);
+                      }}
+                    >
+                      Settings
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLoggingOut}
+                      onClick={() => void handleLogout()}
+                    >
+                      {isLoggingOut ? "Logging out..." : "Logout"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className={`sidebar-account ${accountMenuOpen ? "is-open" : ""}`}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAccountMenuOpen((open) => !open);
+                }}
+                aria-expanded={accountMenuOpen}
+              >
+                <UserAvatar user={currentUser} className="sidebar-account__avatar" />
+                {sidebarOpen && (
+                  <span className="sidebar-account__copy">
+                    <strong>{currentUser.name}</strong>
+                    <span>{currentUser.email}</span>
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
 
       <main className="workspace">
@@ -1226,7 +1735,10 @@ export default function App() {
                 <button
                   type="button"
                   className="ghost-button ghost-button--icon"
-                  onClick={() => setMenuOpen((open) => !open)}
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    setMenuOpen((open) => !open);
+                  }}
                   aria-expanded={menuOpen}
                   aria-label="Open more options"
                 >
@@ -1239,8 +1751,9 @@ export default function App() {
 
                 {menuOpen && (
                   <div className="menu-panel">
-                    <button type="button">Settings</button>
-                    <button type="button">Personalize</button>
+                    <button type="button" onClick={() => void handleOpenInsightsModal()}>
+                      Insights
+                    </button>
                     <button
                       type="button"
                       className="menu-panel__danger"
@@ -1466,6 +1979,154 @@ export default function App() {
           )}
         </div>
 
+        {insightsModalOpen && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setInsightsModalOpen(false)}
+          >
+            <div
+              className="modal-panel modal-panel--insights"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="insights-modal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-panel__header">
+                <div>
+                  <p className="results__eyebrow">Insights</p>
+                  <h2 id="insights-modal-title">Learning Analytics</h2>
+                </div>
+                <button
+                  type="button"
+                  className="modal-panel__close"
+                  onClick={() => setInsightsModalOpen(false)}
+                  aria-label="Close insights modal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="modal-panel__body">
+                {isLoadingInsights ? (
+                  <div className="insights-empty">
+                    <Spinner />
+                    <span>Loading analytics...</span>
+                  </div>
+                ) : insightsError ? (
+                  <div className="insights-empty insights-empty--error">{insightsError}</div>
+                ) : insights ? (
+                  <div className="insights-grid">
+                    <InsightCard
+                      title="Historical Score Trend"
+                      subtitle="Line chart with a rolling 7-attempt moving average."
+                    >
+                      <ResponsiveContainer width="100%" height={280}>
+                        <LineChart data={trendData}>
+                          <CartesianGrid stroke="rgba(148, 163, 184, 0.2)" vertical={false} />
+                          <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                          <YAxis domain={[0, 100]} tickLine={false} axisLine={false} />
+                          <Tooltip
+                            formatter={(value: number | string) => `${formatNumericMetric(value)} pts`}
+                            labelFormatter={(label: string | number) => String(label)}
+                          />
+                          <Legend />
+                          <Line type="monotone" dataKey="total_score" stroke="#2563eb" strokeWidth={3} dot={{ r: 3 }} name="Score" />
+                          <Line type="monotone" dataKey="moving_average" stroke="#14b8a6" strokeWidth={2.5} dot={false} name="7-Attempt Average" />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </InsightCard>
+
+                    <InsightCard
+                      title="Difficulty Performance"
+                      subtitle="Average score based on currently saved quizzes."
+                    >
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={difficultyData}>
+                          <CartesianGrid stroke="rgba(148, 163, 184, 0.2)" vertical={false} />
+                          <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                          <YAxis domain={[0, 100]} tickLine={false} axisLine={false} />
+                          <Tooltip formatter={(value: number | string) => `${formatNumericMetric(value)} pts`} />
+                          <Bar dataKey="average_score" radius={[12, 12, 0, 0]} fill="#1d4ed8" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </InsightCard>
+
+                    <InsightCard
+                      title="Question-Type Ability"
+                      subtitle="Capability across question types based on current saved quizzes."
+                      actions={(
+                        <div className="segmented-control">
+                          <button
+                            type="button"
+                            className={abilityChartMode === "radar" ? "is-active" : ""}
+                            onClick={() => setAbilityChartMode("radar")}
+                          >
+                            Radar
+                          </button>
+                          <button
+                            type="button"
+                            className={abilityChartMode === "bars" ? "is-active" : ""}
+                            onClick={() => setAbilityChartMode("bars")}
+                          >
+                            Bars
+                          </button>
+                        </div>
+                      )}
+                    >
+                      <ResponsiveContainer width="100%" height={320}>
+                        {abilityChartMode === "radar" ? (
+                          <RadarChart data={questionTypeData}>
+                            <PolarGrid />
+                            <PolarAngleAxis dataKey="label" tick={{ fontSize: 12 }} />
+                            <PolarRadiusAxis domain={[0, 100]} />
+                            <Radar dataKey="ability_score" stroke="#2563eb" fill="#60a5fa" fillOpacity={0.4} />
+                            <Tooltip formatter={(value: number | string) => `${formatNumericMetric(value)}%`} />
+                          </RadarChart>
+                        ) : (
+                          <BarChart data={questionTypeData} layout="vertical" margin={{ left: 20 }}>
+                            <CartesianGrid stroke="rgba(148, 163, 184, 0.2)" horizontal={false} />
+                            <XAxis type="number" domain={[0, 100]} tickLine={false} axisLine={false} />
+                            <YAxis type="category" dataKey="label" tickLine={false} axisLine={false} width={108} />
+                            <Tooltip formatter={(value: number | string) => `${formatNumericMetric(value)}%`} />
+                            <Bar dataKey="ability_score" radius={[0, 12, 12, 0]} fill="#2563eb" />
+                          </BarChart>
+                        )}
+                      </ResponsiveContainer>
+                    </InsightCard>
+
+                    <InsightCard
+                      title="Error-Type Distribution"
+                      subtitle={`Sampled from the latest ${insights.sampled_attempt_count} submitted quizzes.`}
+                    >
+                      <ResponsiveContainer width="100%" height={320}>
+                        <PieChart>
+                          <Pie
+                            data={insights.error_type_breakdown}
+                            dataKey="count"
+                            nameKey="error_type"
+                            innerRadius={72}
+                            outerRadius={108}
+                            paddingAngle={2}
+                          >
+                            {insights.error_type_breakdown.map((entry, index) => (
+                              <Cell key={entry.error_type} fill={ERROR_COLORS[index % ERROR_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(value: number | string) => `${formatNumericMetric(value)}`} />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </InsightCard>
+                  </div>
+                ) : (
+                  <div className="insights-empty">No submitted attempts yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {knowledgeModalOpen && currentQuiz && (
           <div
             className="modal-backdrop"
@@ -1566,6 +2227,122 @@ export default function App() {
                   onClick={() => void handleDownloadConfirmed()}
                 >
                   {isDownloadingDocument ? "Preparing..." : "Download PDF"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {settingsModalOpen && currentUser && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setSettingsModalOpen(false)}
+          >
+            <div
+              className="modal-panel modal-panel--settings"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="settings-modal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-panel__header">
+                <div>
+                  <p className="results__eyebrow">Settings</p>
+                  <h2 id="settings-modal-title">Workspace Settings</h2>
+                </div>
+                <button
+                  type="button"
+                  className="modal-panel__close"
+                  onClick={() => setSettingsModalOpen(false)}
+                  aria-label="Close settings modal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="modal-panel__body modal-panel__body--settings">
+                <section className="settings-card">
+                  <div className="settings-card__identity">
+                    <UserAvatar user={currentUser} className="settings-card__avatar" />
+                    <div>
+                      <h3>{currentUser.name}</h3>
+                      <p>{currentUser.email}</p>
+                    </div>
+                  </div>
+                  <div className="settings-card__grid">
+                    <div>
+                      <span>Provider</span>
+                      <strong>Google</strong>
+                    </div>
+                    <div>
+                      <span>Plan</span>
+                      <strong>{currentUser.plan === "free" ? "Free" : currentUser.plan}</strong>
+                    </div>
+                    <div>
+                      <span>Session</span>
+                      <strong>Persistent browser session</strong>
+                    </div>
+                    <div>
+                      <span>Workspace scope</span>
+                      <strong>Your quizzes stay private to this account</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="settings-card settings-card--danger">
+                  <div>
+                    <p className="results__eyebrow">Data Management</p>
+                    <h3>Clear all study data</h3>
+                    <p>
+                      Remove all quizzes, attempts, scores, downloaded reports history, and analytics
+                      snapshots stored under this account.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="submit-button submit-button--danger"
+                    onClick={() => setClearDataConfirmOpen(true)}
+                  >
+                    Clear All Data
+                  </button>
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {clearDataConfirmOpen && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => setClearDataConfirmOpen(false)}
+          >
+            <div
+              className="confirm-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="clear-data-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p className="results__eyebrow">Clear Data</p>
+              <h2 id="clear-data-title">Delete every saved quiz, score, and attempt?</h2>
+              <p>Your account stays active, but all workspace data under it will be removed.</p>
+              <div className="confirm-panel__actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setClearDataConfirmOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="submit-button submit-button--danger"
+                  disabled={isClearingData}
+                  onClick={() => void handleClearAllDataConfirmed()}
+                >
+                  {isClearingData ? "Clearing..." : "Clear All Data"}
                 </button>
               </div>
             </div>

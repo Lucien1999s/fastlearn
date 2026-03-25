@@ -76,3 +76,43 @@ export interface QuizScoreResponse {
   max_score: number;
   results: QuizScoreQuestionResult[];
 }
+
+export interface HistoryTrendPoint {
+  attempted_at: string;
+  total_score: number;
+  moving_average: number;
+}
+
+export interface DifficultyPerformanceItem {
+  difficulty: DifficultyLevel;
+  average_score: number;
+  attempts: number;
+}
+
+export interface QuestionTypePerformanceItem {
+  question_type: QuestionType;
+  ability_score: number;
+  answered: number;
+}
+
+export interface ErrorTypeBreakdownItem {
+  error_type: string;
+  count: number;
+  share: number;
+}
+
+export interface LearningInsightsResponse {
+  history_trend: HistoryTrendPoint[];
+  difficulty_performance: DifficultyPerformanceItem[];
+  question_type_performance: QuestionTypePerformanceItem[];
+  error_type_breakdown: ErrorTypeBreakdownItem[];
+  sampled_attempt_count: number;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  picture_url: string | null;
+  plan: string;
+}

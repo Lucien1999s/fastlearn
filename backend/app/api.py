@@ -6,9 +6,16 @@ from typing import Annotated, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .auth import CurrentUser
+from .core.insights import (
+    build_error_breakdown,
+    compute_difficulty_performance,
+    compute_error_type_breakdown,
+    compute_history_trend,
+    compute_question_type_performance,
+)
 from .core.logic import run_quiz_workflow
 from .core.model import (
     DifficultyLevel,
@@ -25,6 +32,10 @@ from .db import (
     create_quiz_record,
     delete_quiz_record,
     get_db_session,
+    get_quiz_record_for_user,
+    list_quiz_attempts_for_user,
+    list_quiz_records_for_user,
+    list_scored_quiz_records_for_user,
     save_quiz_score,
     update_quiz_record,
     update_quiz_title,
@@ -69,6 +80,38 @@ class QuizScoreResponse(BaseModel):
     total_score: float
     max_score: float
     results: list[QuizScoreQuestionResult]
+
+
+class HistoryTrendPoint(BaseModel):
+    attempted_at: datetime
+    total_score: float
+    moving_average: float
+
+
+class DifficultyPerformanceItem(BaseModel):
+    difficulty: DifficultyLevel
+    average_score: float
+    attempts: int
+
+
+class QuestionTypePerformanceItem(BaseModel):
+    question_type: QuestionType
+    ability_score: float
+    answered: int
+
+
+class ErrorTypeBreakdownItem(BaseModel):
+    error_type: str
+    count: int
+    share: float
+
+
+class LearningInsightsResponse(BaseModel):
+    history_trend: list[HistoryTrendPoint]
+    difficulty_performance: list[DifficultyPerformanceItem]
+    question_type_performance: list[QuestionTypePerformanceItem]
+    error_type_breakdown: list[ErrorTypeBreakdownItem]
+    sampled_attempt_count: int
 
 
 class QuizWorkflowResponse(BaseModel):
@@ -157,11 +200,12 @@ def _serialize_quiz_record(record: QuizRecord) -> QuizWorkflowResponse:
     status_code=status.HTTP_200_OK,
     summary="Run quiz workflow",
 )
-def run_quiz(payload: QuizWorkflowRequest, db: DbSession) -> QuizWorkflowResponse:
+def run_quiz(payload: QuizWorkflowRequest, db: DbSession, current_user: CurrentUser) -> QuizWorkflowResponse:
     result = _run_quiz_workflow_or_raise(payload)
 
     record = create_quiz_record(
         db,
+        user_id=current_user.id,
         content=payload.content,
         preference=payload.preference,
         difficulty=payload.difficulty,
@@ -180,9 +224,8 @@ def run_quiz(payload: QuizWorkflowRequest, db: DbSession) -> QuizWorkflowRespons
     status_code=status.HTTP_200_OK,
     summary="List saved quizzes",
 )
-def list_quizzes(db: DbSession) -> list[QuizHistoryItem]:
-    statement = select(QuizRecord).order_by(QuizRecord.created_at.desc())
-    records = db.scalars(statement).all()
+def list_quizzes(db: DbSession, current_user: CurrentUser) -> list[QuizHistoryItem]:
+    records = list_quiz_records_for_user(db, current_user.id)
     return [
         QuizHistoryItem(
             id=record.id,
@@ -201,8 +244,8 @@ def list_quizzes(db: DbSession) -> list[QuizHistoryItem]:
     status_code=status.HTTP_200_OK,
     summary="Get saved quiz detail",
 )
-def get_quiz(quiz_id: str, db: DbSession) -> QuizWorkflowResponse:
-    record = db.get(QuizRecord, quiz_id)
+def get_quiz(quiz_id: str, db: DbSession, current_user: CurrentUser) -> QuizWorkflowResponse:
+    record = get_quiz_record_for_user(db, user_id=current_user.id, quiz_id=quiz_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -218,8 +261,13 @@ def get_quiz(quiz_id: str, db: DbSession) -> QuizWorkflowResponse:
     status_code=status.HTTP_200_OK,
     summary="Update saved quiz with a new workflow run",
 )
-def rerun_quiz(quiz_id: str, payload: QuizWorkflowRequest, db: DbSession) -> QuizWorkflowResponse:
-    record = db.get(QuizRecord, quiz_id)
+def rerun_quiz(
+    quiz_id: str,
+    payload: QuizWorkflowRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> QuizWorkflowResponse:
+    record = get_quiz_record_for_user(db, user_id=current_user.id, quiz_id=quiz_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -252,8 +300,9 @@ def score_quiz(
     quiz_id: str,
     payload: QuizScoreRequest,
     db: DbSession,
+    current_user: CurrentUser,
 ) -> QuizScoreResponse:
-    record = db.get(QuizRecord, quiz_id)
+    record = get_quiz_record_for_user(db, user_id=current_user.id, quiz_id=quiz_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -295,9 +344,31 @@ def score_quiz(
         record,
         submitted_answers={str(item.question_index): item.answer for item in payload.answers},
         score_result=response.model_dump(),
+        error_breakdown=build_error_breakdown(response.model_dump()),
     )
 
     return response
+
+
+@router.get(
+    "/insights",
+    response_model=LearningInsightsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get learning insights",
+)
+def get_learning_insights(db: DbSession, current_user: CurrentUser) -> LearningInsightsResponse:
+    current_records = list_scored_quiz_records_for_user(db, current_user.id)
+    attempts = list_quiz_attempts_for_user(db, current_user.id)
+
+    error_type_breakdown, sampled_attempt_count = compute_error_type_breakdown(attempts, limit=20)
+
+    return LearningInsightsResponse(
+        history_trend=compute_history_trend(attempts),
+        difficulty_performance=compute_difficulty_performance(current_records),
+        question_type_performance=compute_question_type_performance(current_records),
+        error_type_breakdown=error_type_breakdown,
+        sampled_attempt_count=sampled_attempt_count,
+    )
 
 
 @router.patch(
@@ -310,8 +381,9 @@ def patch_quiz_title(
     quiz_id: str,
     payload: QuizTitleUpdateRequest,
     db: DbSession,
+    current_user: CurrentUser,
 ) -> QuizHistoryItem:
-    record = db.get(QuizRecord, quiz_id)
+    record = get_quiz_record_for_user(db, user_id=current_user.id, quiz_id=quiz_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -341,8 +413,8 @@ def patch_quiz_title(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete saved quiz",
 )
-def delete_quiz(quiz_id: str, db: DbSession) -> None:
-    record = db.get(QuizRecord, quiz_id)
+def delete_quiz(quiz_id: str, db: DbSession, current_user: CurrentUser) -> None:
+    record = get_quiz_record_for_user(db, user_id=current_user.id, quiz_id=quiz_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
