@@ -61,8 +61,10 @@ button {
 .sidebar {
   position: relative;
   display: flex;
+  height: 100vh;
   width: 312px;
   flex-direction: column;
+  overflow: hidden;
   padding: 22px 18px;
   border-right: 1px solid rgba(15, 23, 42, 0.08);
   background: rgba(255, 255, 255, 0.72);
@@ -151,6 +153,7 @@ button {
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .sidebar__label,
@@ -165,6 +168,8 @@ button {
 
 .sidebar__list {
   display: flex;
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
@@ -210,7 +215,7 @@ button {
   align-items: flex-start;
   gap: 12px;
   width: 100%;
-  min-height: 62px;
+  min-height: 108px;
   padding: 12px;
   border-radius: 18px;
   color: inherit;
@@ -250,6 +255,7 @@ button {
   align-items: flex-start;
   gap: 12px;
   flex: 1;
+  min-height: 100%;
   min-width: 0;
   border: 0;
   padding: 0;
@@ -283,6 +289,7 @@ button {
   flex: 1;
   flex-direction: column;
   gap: 6px;
+  padding-bottom: 2px;
 }
 
 .sidebar__item-mark {
@@ -298,6 +305,7 @@ button {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.25;
 }
 
 .sidebar__item-title-input {
@@ -349,6 +357,7 @@ button {
 .sidebar__item-meta {
   color: #64748b;
   font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .sidebar__empty {
@@ -622,6 +631,11 @@ button {
 .submit-button--danger {
   background: linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%);
   box-shadow: 0 18px 32px rgba(220, 38, 38, 0.2);
+}
+
+.submit-button--success {
+  background: linear-gradient(135deg, #166534 0%, #22c55e 100%);
+  box-shadow: 0 18px 32px rgba(34, 197, 94, 0.22);
 }
 
 .spinner {
@@ -1363,6 +1377,7 @@ button {
   .sidebar,
   .sidebar.is-collapsed {
     width: 100%;
+    height: auto;
     min-height: auto;
   }
 
@@ -1562,6 +1577,7 @@ button {
 .sidebar__footer {
   position: relative;
   margin-top: 16px;
+  flex: 0 0 auto;
   padding-top: 14px;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
 }

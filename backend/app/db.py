@@ -97,6 +97,11 @@ class QuizRecord(Base):
         nullable=False,
         server_default=func.now(),
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
 
 
 class QuizAttempt(Base):
@@ -163,6 +168,8 @@ def _ensure_database_schema() -> None:
             statements.append("ALTER TABLE quiz_records ADD COLUMN score_result JSONB")
         if "scored_at" not in existing_columns:
             statements.append("ALTER TABLE quiz_records ADD COLUMN scored_at TIMESTAMP WITH TIME ZONE")
+        if "updated_at" not in existing_columns:
+            statements.append("ALTER TABLE quiz_records ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()")
 
     if "quiz_attempts" in table_names:
         existing_attempt_columns = {column["name"] for column in inspector.get_columns("quiz_attempts")}
@@ -337,7 +344,7 @@ def delete_all_user_sessions(session: Session, user_id: str) -> None:
 
 
 def list_quiz_records_for_user(session: Session, user_id: str) -> list[QuizRecord]:
-    statement = select(QuizRecord).where(QuizRecord.user_id == user_id).order_by(QuizRecord.created_at.desc())
+    statement = select(QuizRecord).where(QuizRecord.user_id == user_id).order_by(QuizRecord.updated_at.desc())
     return list(session.scalars(statement).all())
 
 
@@ -508,6 +515,7 @@ def create_quiz_record(
         submitted_answers=None,
         score_result=None,
         scored_at=None,
+        updated_at=utcnow(),
     )
     session.add(record)
     session.commit()
@@ -539,6 +547,7 @@ def update_quiz_record(
     record.submitted_answers = None
     record.score_result = None
     record.scored_at = None
+    record.updated_at = utcnow()
 
     if auto_generated_title:
         record.title = build_quiz_title(content)
@@ -560,6 +569,7 @@ def save_quiz_score(
     record.submitted_answers = submitted_answers
     record.score_result = score_result
     record.scored_at = utcnow()
+    record.updated_at = utcnow()
     session.add(record)
     session.add(
         QuizAttempt(
@@ -581,6 +591,15 @@ def save_quiz_score(
 
 def update_quiz_title(session: Session, record: QuizRecord, title: str) -> QuizRecord:
     record.title = title.strip()[:MAX_TITLE_LENGTH]
+    record.updated_at = utcnow()
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+def touch_quiz_record(session: Session, record: QuizRecord) -> QuizRecord:
+    record.updated_at = utcnow()
     session.add(record)
     session.commit()
     session.refresh(record)

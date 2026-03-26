@@ -43,6 +43,7 @@ from .db import (
     record_quiz_generation,
     record_quiz_retake,
     save_quiz_score,
+    touch_quiz_record,
     update_learning_profile_settings,
     update_quiz_record,
     update_quiz_title,
@@ -139,6 +140,7 @@ class QuizWorkflowResponse(BaseModel):
     difficulty: DifficultyLevel
     numbers: int
     created_at: datetime
+    updated_at: datetime
     summary: SummarySchema
     spec: SpecSchema
     questions: list[QuestionItem]
@@ -152,6 +154,7 @@ class QuizHistoryItem(BaseModel):
     difficulty: DifficultyLevel
     numbers: int
     created_at: datetime
+    updated_at: datetime
 
 
 class QuizTitleUpdateRequest(BaseModel):
@@ -251,6 +254,7 @@ def _serialize_quiz_record(record: QuizRecord) -> QuizWorkflowResponse:
         difficulty=record.difficulty,
         numbers=record.numbers,
         created_at=record.created_at,
+        updated_at=record.updated_at,
         summary=record.summary,
         spec=record.spec,
         questions=record.questions,
@@ -316,6 +320,7 @@ def list_quizzes(db: DbSession, current_user: CurrentUser) -> list[QuizHistoryIt
             difficulty=record.difficulty,
             numbers=record.numbers,
             created_at=record.created_at,
+            updated_at=record.updated_at,
         )
         for record in records
     ]
@@ -335,7 +340,7 @@ def get_quiz(quiz_id: str, db: DbSession, current_user: CurrentUser) -> QuizWork
             detail="Quiz not found.",
         )
 
-    return _serialize_quiz_record(record)
+    return _serialize_quiz_record(touch_quiz_record(db, record))
 
 
 @router.put(
@@ -580,6 +585,7 @@ def patch_quiz_title(
         difficulty=updated_record.difficulty,
         numbers=updated_record.numbers,
         created_at=updated_record.created_at,
+        updated_at=updated_record.updated_at,
     )
 
 

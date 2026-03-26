@@ -20,9 +20,9 @@ def summarize_content(state: QuizState) -> dict:
     structured_llm = get_llm().with_structured_output(SummarySchema)
 
     prompt = f"""你是一個筆記專家，以下是一份原始筆記:
-<START>{state['content']}<END>
+{state['content']}
 
-謹慎思考，並將原始筆記中的*重要*知識點歸納整理成 "知識點":"知識內容敘述"
+謹慎思考，使用語言和以上原始筆記用的主要語言一致，並將原始筆記中的*重要*知識點歸納整理成 "知識點":"知識內容敘述"
 """
 
     response = structured_llm.invoke(prompt)
@@ -50,7 +50,7 @@ def generate_questions(state: QuizState) -> dict:
     structured_llm = get_llm().with_structured_output(QuizOutputSchema)
 
     prompt = f"""你是專業出題考官，你將根據出題規格和考試範圍出題
-考試範圍:<START>:{state['summary']}<END>
+考試範圍:{state['summary']}
 出題規格:{state['spec']}
 
 出題要求:
@@ -60,6 +60,7 @@ def generate_questions(state: QuizState) -> dict:
 4. 單選題 answer 請填單一字母，例如 A
 5. 多選題 answer 請填字母陣列，例如 ["A", "C"]
 6. 情境題與錯題改寫 answer 填寫精簡約兩三句的解答
+7. 使用語言: 請和上面考試範圍用的語言一樣
 """
 
     response = structured_llm.invoke(prompt)
@@ -96,8 +97,8 @@ def resolve_learning_domain(state: LearningProfileState) -> dict:
 
 要求:
 1. 必須使用大領域名稱，不要用太細碎的子概念命名
-2. 若既有領域已經足夠涵蓋，請沿用既有領域名稱
-3. 若沒有合適領域，才建立一個新的大領域名稱
+2. 若既有某領域能代表，請沿用既有領域名稱
+3. 若沒有合適領域，建立一個新的大領域名稱
 """
 
     response = structured_llm.invoke(prompt)

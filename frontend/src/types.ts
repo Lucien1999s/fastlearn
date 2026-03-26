@@ -41,6 +41,7 @@ export interface QuizHistoryItem {
   difficulty: DifficultyLevel;
   numbers: number;
   created_at: string;
+  updated_at: string;
 }
 
 export interface QuizWorkflowResponse extends QuizHistoryItem {

@@ -45,7 +45,7 @@ class QuizOutputSchema(BaseModel):
 
 
 class JudgeResultSchema(BaseModel):
-    feedback: str = Field(description="第二人稱對考生的批改敘述")
+    feedback: str = Field(description="第二人稱對考生的批改敘述(語言與題目用一樣的)")
     score: ScoreBand = Field(description="評分等級")
 
 

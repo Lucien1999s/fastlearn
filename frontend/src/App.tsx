@@ -166,6 +166,7 @@ function toHistoryItem(quiz: QuizWorkflowResponse): QuizHistoryItem {
     difficulty: quiz.difficulty,
     numbers: quiz.numbers,
     created_at: quiz.created_at,
+    updated_at: quiz.updated_at,
   };
 }
 
@@ -315,6 +316,10 @@ function formatChoiceLabel(value: string): string {
   return value;
 }
 
+function getQuestionTypeLabel(questionType: string): string {
+  return QUESTION_TYPE_LABELS[questionType] ?? questionType;
+}
+
 function formatUserAnswer(question: QuestionItem, answer: UserAnswer | undefined): string {
   if (answer === undefined || answer === "") {
     return "No answer provided.";
@@ -372,7 +377,7 @@ function buildDownloadDocumentMarkup({
   documentType: DownloadDocumentType;
 }): string {
   const metadata = [
-    `Created: ${formatDate(quiz.created_at)}`,
+    `Updated: ${formatDate(quiz.updated_at)}`,
     `Difficulty: ${DIFFICULTY_LABELS[quiz.difficulty]}`,
     `Question Count: ${formatQuestionCount(quiz.numbers)}`,
   ];
@@ -395,7 +400,7 @@ function buildDownloadDocumentMarkup({
       <article class="pdf-question">
         <div class="pdf-question__head">
           <span class="pdf-question__index">${String(index + 1).padStart(2, "0")}</span>
-          <span class="pdf-question__type">${escapeHtml(question.type)}</span>
+          <span class="pdf-question__type">${escapeHtml(getQuestionTypeLabel(question.type))}</span>
           ${
             documentType === "report" && scoreEntry
               ? `<span class="pdf-question__score">${formatScoreValue(scoreEntry.earned_score)} / ${formatScoreValue(scoreEntry.max_score)}</span>`
@@ -715,7 +720,7 @@ function QuestionCard({
       <div className="question-card__header">
         <div className="question-card__heading">
           <span className="question-card__index">{String(index + 1).padStart(2, "0")}</span>
-          <span className="question-card__type">{question.type}</span>
+          <span className="question-card__type">{getQuestionTypeLabel(question.type)}</span>
         </div>
         {isReview && scoreResult && (
           <span className="question-card__score">
@@ -889,6 +894,7 @@ export default function App() {
   const [learningProfile, setLearningProfile] = useState<LearningProfileResponse | null>(null);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminError, setAdminError] = useState<string | null>(null);
+  const [adminSavedUserId, setAdminSavedUserId] = useState<string | null>(null);
   const [insightsError, setInsightsError] = useState<string | null>(null);
   const [learningProfileError, setLearningProfileError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1142,6 +1148,18 @@ export default function App() {
     };
   }, [authMode, authStatus]);
 
+  useEffect(() => {
+    if (!adminModalOpen || !currentUser?.is_admin) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshAdminUsers(true);
+    }, 15000);
+
+    return () => window.clearInterval(intervalId);
+  }, [adminModalOpen, currentUser?.is_admin]);
+
   async function handleSelectHistoryItem(quizId: string) {
     setSelectedQuizId(quizId);
     setEditingTitleId(null);
@@ -1150,6 +1168,7 @@ export default function App() {
     try {
       const detail = await fetchJson<QuizWorkflowResponse>(`/quizzes/${quizId}`);
       hydrateQuiz(detail);
+      setHistory((previous) => [toHistoryItem(detail), ...previous.filter((item) => item.id !== detail.id)]);
       setMenuOpen(false);
       setAccountMenuOpen(false);
       panelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
@@ -1282,16 +1301,16 @@ export default function App() {
     }
   }
 
-  async function handleOpenAdminModal() {
-    setAccountMenuOpen(false);
-    setAdminModalOpen(true);
-    setAdminError(null);
-
-    if (!currentUser?.is_admin || isLoadingAdminUsers) {
+  async function refreshAdminUsers(background = false) {
+    if (!currentUser?.is_admin) {
       return;
     }
 
-    setIsLoadingAdminUsers(true);
+    if (!background) {
+      setIsLoadingAdminUsers(true);
+    }
+    setAdminError(null);
+
     try {
       const response = await fetchJson<AdminUserSummary[]>("/admin/users");
       setAdminUsers(response);
@@ -1303,8 +1322,21 @@ export default function App() {
       }
       setAdminError(message);
     } finally {
-      setIsLoadingAdminUsers(false);
+      if (!background) {
+        setIsLoadingAdminUsers(false);
+      }
     }
+  }
+
+  async function handleOpenAdminModal() {
+    setAccountMenuOpen(false);
+    setAdminModalOpen(true);
+
+    if (!currentUser?.is_admin || isLoadingAdminUsers) {
+      return;
+    }
+
+    await refreshAdminUsers();
   }
 
   async function handleOpenPersonalizeModal() {
@@ -1420,6 +1452,11 @@ export default function App() {
           daily_retake_limit: updatedUser.daily_retake_limit,
         });
       }
+      setAdminSavedUserId(user.id);
+      window.setTimeout(() => {
+        setAdminSavedUserId((current) => (current === user.id ? null : current));
+      }, 1800);
+      void refreshAdminUsers(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update user access.";
       if (message === "Authentication required." || message === "Session expired.") {
@@ -1791,7 +1828,7 @@ export default function App() {
                           <span className="sidebar__item-copy">
                             <span className="sidebar__item-title">{item.title}</span>
                             <span className="sidebar__item-meta">
-                              {formatDate(item.created_at)} · {formatQuestionCount(item.numbers)}
+                              {formatDate(item.updated_at)} · {formatQuestionCount(item.numbers)}
                             </span>
                           </span>
                         )}
@@ -2081,7 +2118,7 @@ export default function App() {
                   <h1>{currentQuiz.title}</h1>
                 </div>
                 <div className="results__chips">
-                  <span>{formatDate(currentQuiz.created_at)}</span>
+                  <span>{formatDate(currentQuiz.updated_at)}</span>
                   <span>{DIFFICULTY_LABELS[currentQuiz.difficulty]}</span>
                   <span>{formatQuestionCount(currentQuiz.numbers)}</span>
                 </div>
@@ -2677,11 +2714,15 @@ export default function App() {
                           </label>
                           <button
                             type="button"
-                            className="submit-button"
+                            className={`submit-button ${adminSavedUserId === user.id ? "submit-button--success" : ""}`}
                             disabled={isSavingAdminAccess === user.id}
                             onClick={() => void handleSaveAdminAccess(user, {})}
                           >
-                            {isSavingAdminAccess === user.id ? "Saving..." : "Save Access"}
+                            {isSavingAdminAccess === user.id
+                              ? "Saving..."
+                              : adminSavedUserId === user.id
+                                ? "Saved"
+                                : "Save Access"}
                           </button>
                         </div>
                       </article>
