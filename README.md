@@ -1,93 +1,96 @@
-# fastlearn
+# Fastlearn
 
-An AI-powered learning tool that turns notes into practice questions, provides AI grading, and supports personalized learning and progress tracking.
+Fastlearn is an AI-powered study workspace that converts raw learning notes into structured quizzes, grades completed attempts with rule-based and LLM-assisted evaluation, tracks long-term performance, and builds a domain-level learning profile over time. It combines a FastAPI backend, a React + TypeScript frontend, PostgreSQL persistence, Google Sign-In, analytics dashboards, and downloadable quiz/report exports into a single full-stack application for iterative self-testing.
 
-## Docker
+## Run The Full Project
 
-1. Create a `.env` file in the repo root:
+### 1. Create your environment file
 
-```env
-GOOGLE_API_KEY=your_google_api_key
+Copy the example file and fill in the required values:
+
+```bash
+cp .env.example .env
 ```
 
-2. Start the full stack:
+Required:
+
+- `GOOGLE_API_KEY`
+- `GOOGLE_CLIENT_ID`
+
+Recommended:
+
+- `SUPERUSER_EMAIL`
+
+### 2. Start the stack with Docker
+
+From the repo root:
 
 ```bash
 docker compose up --build
 ```
 
-3. Open the services after startup:
+### 3. Open the app
 
 - Frontend: `http://127.0.0.1:3000`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
+- Backend Swagger: `http://127.0.0.1:8000/docs`
+- Backend ReDoc: `http://127.0.0.1:8000/redoc`
 
-The Docker stack includes:
+## Environment Variables
 
-- `postgres`: stores generated quiz history
-- `backend`: FastAPI + LangGraph + PostgreSQL persistence
-- `frontend`: React + TypeScript + Vite UI served by Nginx
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GOOGLE_API_KEY` | Yes | Used by the backend LLM workflows for quiz generation, scoring support, and learning-profile updates. |
+| `GOOGLE_CLIENT_ID` | Yes | Used by Google Sign-In on the frontend and by the backend to verify Google identity tokens. |
+| `SUPERUSER_EMAIL` | Recommended | Grants permanent admin access to the specified Google account. |
+| `SESSION_COOKIE_NAME` | No | Name of the browser session cookie. Default: `fastlearn_session`. |
+| `SESSION_MAX_AGE_SECONDS` | No | Session lifetime in seconds. Default: `2592000` (30 days). |
+| `SESSION_COOKIE_SECURE` | No | Set `true` for HTTPS deployments. Use `false` for local HTTP development. |
+| `SESSION_COOKIE_SAMESITE` | No | Cookie same-site policy. Local default is `lax`. |
+| `CORS_ALLOW_ORIGINS` | No | Allowed frontend origins for the backend API. Local defaults are already provided. |
+| `DATABASE_URL` | Optional | Only needed for local backend development outside Docker Compose. Docker Compose already injects it for the backend container. |
 
-## Develop Use
+## Demo
 
-### Backend
+### 1. Generate a quiz from your study notes
 
-1. Start PostgreSQL first:
+Paste your learning notes, optionally add a preference, choose a difficulty level, set the question count, and click **Generate**. Fastlearn is designed for quick self-testing from dense notes, lecture summaries, interview prep material, or topic-specific study outlines.
 
-```bash
-docker compose up -d postgres
-```
+![Generate quiz flow](docs/images/operate.png)
 
-2. Add these values to `.env`:
+### 2. Take the test in the app
 
-```env
-GOOGLE_API_KEY=your_google_api_key
-DATABASE_URL=postgresql+psycopg://fastlearn:fastlearn@localhost:5432/fastlearn
-```
+Fastlearn supports multiple question formats, including true/false, single-choice, multiple-choice, scenario questions, and rewrite-style prompts. You can answer directly inside the workspace and submit the full attempt when finished.
 
-3. Install backend dependencies:
+![Question answering interface](docs/images/test.png)
 
-```bash
-cd backend
-pip install -r requirements.txt
-```
+### 3. Review AI-assisted scoring and answer feedback
 
-4. Start the backend:
+After submission, Fastlearn calculates a weighted score across the full quiz and presents answer-level review states. Objective questions are scored deterministically, while open-ended responses are judged against rubric-style expectations with AI assistance.
 
-```bash
-uvicorn app.main:app --reload
-```
+![Score overview](docs/images/score1.png)
 
-### Frontend
+The review view then breaks the attempt down question by question, showing your answer, the official answer, and correctness feedback in context.
 
-1. Install frontend dependencies:
+![Question-by-question scoring review](docs/images/score2.png)
 
-```bash
-cd frontend
-npm install
-```
+### 4. Inspect learning analytics
 
-2. Start the frontend dev server:
+The **Insights** panel summarizes historical performance and helps users see how their learning behavior changes over time.
 
-```bash
-npm run dev
-```
+The score trend view highlights total-score progression and adds a rolling moving average for a clearer long-term signal.
 
-3. Open the dev app:
+![Historical score trend and difficulty performance](docs/images/insight1.png)
 
-- Frontend: `http://127.0.0.1:5173`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
+The analytics dashboard also compares question-type ability and error-type distribution, making it easier to spot whether mistakes come from concept gaps, reasoning gaps, distractor choices, or missed correct options.
 
-## API Example
+![Question-type ability and error-type analysis](docs/images/insight2.png)
 
-```bash
-curl -X POST 'http://127.0.0.1:8000/api/quiz/run' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "content": "牛頓第一運動定律描述物體在不受外力時會維持原本的運動狀態。",
-    "difficulty": "medium",
-    "preference": "偏重觀念理解",
-    "numbers": 5
-  }'
-```
+Fastlearn also tracks domain-level mastery so users can understand how they are progressing across different study areas rather than only reviewing raw quiz scores.
+
+![Learning domain mastery](docs/images/insight3.png)
+
+### 5. Turn on domain-level learning profile updates
+
+Inside **Personalize**, users can enable automatic domain-profile updates. When enabled, each submitted quiz can contribute to an AI-generated mastery snapshot for the relevant study domain, helping build a running picture of strengths, gaps, and current study status.
+
+![Learning domain profile](docs/images/ai-domain-analysis.png)
